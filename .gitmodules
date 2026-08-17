@@ -1,3 +1,15 @@
 [submodule "external_src/Manifold"]
 	path = external_src/Manifold
 	url = https://github.com/hjwdzh/Manifold.git
+[submodule "third_party/dreamzero"]
+	path = third_party/dreamzero
+	url = https://github.com/dreamzero0/dreamzero.git
+[submodule "third_party/molmoact2"]
+	path = third_party/molmoact2
+	url = https://github.com/allenai/molmoact2.git
+[submodule "third_party/openpi"]
+	path = third_party/openpi
+	url = https://github.com/Physical-Intelligence/openpi.git
+[submodule "third_party/tiptop"]
+	path = third_party/tiptop
+	url = https://github.com/tiptop-robot/tiptop.git
