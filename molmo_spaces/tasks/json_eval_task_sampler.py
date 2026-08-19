@@ -383,7 +383,16 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
                 .get("joints", {})
                 .get(joint_name, None)
             )
-            if get_joint_grasp_path(thor_object_name, thor_joint_name) is not None:
+            # grasp_libraries=["droid"] is required here, not optional: THOR articulated
+            # objects (drawers/cabinets/fridges) are scene-embedded architecture, not part
+            # of the general objects/thor catalog, so the uid-based package lookup
+            # get_joint_grasp_path() falls back to when grasp_libraries is omitted can never
+            # resolve them (confirmed: _locate_uid_package("Drawer_e0b0bc36") -> (None, None,
+            # None) even though grasps/droid/Drawer_e0b0bc36/ exists on disk). The sibling
+            # datagen path (opening_task_samplers.py's _has_grasps/_sample_task) already
+            # passes this; this JSON-eval path was missing it, causing every Close-v1
+            # episode to fail task sampling regardless of policy.
+            if get_joint_grasp_path(thor_object_name, thor_joint_name, grasp_libraries=["droid"]) is not None:
                 joint_names_with_grasp_file.append(joint_name)
         if len(joint_names_with_grasp_file) == 0:
             raise ValueError(f"No joints with grasp file found for {pickup_obj.name}")
@@ -573,6 +582,14 @@ class JsonEvalTaskSampler(BaseMujocoTaskSampler):
             log.info(f"Added body to scene: {object_name}")
 
         self._metadata_adder.update(name_to_meta)
+
+        # Unlike this method's episode-spec-driven object add/remove above, this delegates
+        # to the policy's own hook (e.g. add_grasp_collision_bodies for planner policies
+        # with filter_colliding_grasps=True) -- PickTaskSampler.add_auxiliary_objects does
+        # this for datagen; JSON eval must too, or a planner policy references auxiliary
+        # bodies (e.g. "grasp_collision_0") that were never added to the model, erroring
+        # every episode. No-op for InferencePolicy subclasses (default implementation).
+        self.config.policy_config.policy_cls.add_auxiliary_objects(self.config, spec)
 
     def randomize_scene(self, env: CPUMujocoEnv, robot_view) -> None:
         """

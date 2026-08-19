@@ -122,7 +122,16 @@ class EvalTaskSampler(PickTaskSampler):
                 .get("joints", {})
                 .get(joint_name, None)
             )
-            if get_joint_grasp_path(thor_object_name, thor_joint_name) is not None:
+            # grasp_libraries=["droid"] is required here, not optional -- same trap already
+            # fixed in json_eval_task_sampler.py's set_joint_values. THOR articulated objects
+            # (drawers/cabinets/ovens) are scene-embedded architecture, absent from the
+            # general objects/thor catalog, so the uid-based package lookup
+            # get_joint_grasp_path() falls back to when grasp_libraries is omitted can never
+            # find them and returns None even though the grasp file exists on disk. That
+            # surfaces as a bogus "No joints with grasp file found" ValueError below.
+            if get_joint_grasp_path(
+                thor_object_name, thor_joint_name, grasp_libraries=["droid"]
+            ) is not None:
                 joint_names_with_grasp_file.append(joint_name)
         if len(joint_names_with_grasp_file) == 0:
             raise ValueError(f"No joints with grasp file found for {pickup_obj.name}")
