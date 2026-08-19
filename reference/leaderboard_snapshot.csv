@@ -1,0 +1,49 @@
+task,policy,success_rate,n_episodes,embodiment,metric,snapshot_date
+Pick-v1.5,pi05_droid,18.05,997,DROID,oracle,2026-08-17
+Pick-v2-classic,pi05_droid,6.38,987,DROID,oracle,2026-08-17
+Pick-v2-filament,pi05_droid,7.01,985,DROID,oracle,2026-08-17
+Pick-v2-RandCam,pi05_droid,7.96,804,DROID,oracle,2026-08-17
+PnP-v2,pi05_droid,12.01,541,DROID,oracle,2026-08-17
+PnP-NextTo-v2,pi05_droid,10.25,322,DROID,oracle,2026-08-17
+PnP-Color-v2,pi05_droid,10.41,961,DROID,oracle,2026-08-17
+Open-v1,pi05_droid,22.7,1000,DROID,oracle,2026-08-17
+Close-v1,pi05_droid,65.14,915,DROID,oracle,2026-08-17
+MolmoBot Combined,pi05_droid,10.25,5597,DROID,oracle,2026-08-17
+Pick-v1.5,tiptop,67.5,1000,DROID,oracle,2026-08-18
+Pick-v2-classic,tiptop,50.0,1000,DROID,oracle,2026-08-18
+Pick-v2-filament,tiptop,48.5,1000,DROID,oracle,2026-08-18
+Pick-v2-RandCam,tiptop,47.8,1000,DROID,oracle,2026-08-18
+PnP-v2,tiptop,29.4,1000,DROID,oracle,2026-08-18
+PnP-NextTo-v2,tiptop,38.0,1000,DROID,oracle,2026-08-18
+PnP-Color-v2,tiptop,31.5,1000,DROID,oracle,2026-08-18
+MolmoBot Combined,tiptop,44.67,7000,DROID,oracle,2026-08-18
+Pick-v1.5,molmoact2_droid,43.4,1000,DROID,oracle,2026-08-19
+Pick-v2-classic,molmoact2_droid,20.5,1000,DROID,oracle,2026-08-19
+Pick-v2-filament,molmoact2_droid,21.9,1000,DROID,oracle,2026-08-19
+Pick-v2-RandCam,molmoact2_droid,11.1,1000,DROID,oracle,2026-08-19
+PnP-v2,molmoact2_droid,15.6,1000,DROID,oracle,2026-08-19
+PnP-NextTo-v2,molmoact2_droid,18.5,1000,DROID,oracle,2026-08-19
+PnP-Color-v2,molmoact2_droid,19.3,1000,DROID,oracle,2026-08-19
+Open-v1,molmoact2_droid,11.7,1000,DROID,oracle,2026-08-19
+Close-v1,molmoact2_droid,71.26,915,DROID,oracle,2026-08-19
+MolmoBot Combined,molmoact2_droid,21.47,7000,DROID,oracle,2026-08-19
+Pick-v1.5,cosmos_edge,66.5,1000,DROID,oracle,2026-08-18
+Pick-v2-classic,cosmos_edge,32.3,1000,DROID,oracle,2026-08-18
+Pick-v2-filament,cosmos_edge,32.2,1000,DROID,oracle,2026-08-18
+Pick-v2-RandCam,cosmos_edge,25.7,1000,DROID,oracle,2026-08-18
+PnP-v2,cosmos_edge,26.0,1000,DROID,oracle,2026-08-18
+PnP-NextTo-v2,cosmos_edge,22.9,1000,DROID,oracle,2026-08-18
+PnP-Color-v2,cosmos_edge,34.3,1000,DROID,oracle,2026-08-18
+Open-v1,cosmos_edge,32.0,1000,DROID,oracle,2026-08-18
+Close-v1,cosmos_edge,79.13,915,DROID,oracle,2026-08-18
+MolmoBot Combined,cosmos_edge,34.27,7000,DROID,oracle,2026-08-18
+Pick-v1.5,cosmos_nano,66.5,1000,DROID,oracle,2026-08-18
+Pick-v2-classic,cosmos_nano,32.3,1000,DROID,oracle,2026-08-18
+Pick-v2-filament,cosmos_nano,32.2,1000,DROID,oracle,2026-08-18
+Pick-v2-RandCam,cosmos_nano,25.7,1000,DROID,oracle,2026-08-18
+PnP-v2,cosmos_nano,26.0,1000,DROID,oracle,2026-08-18
+PnP-NextTo-v2,cosmos_nano,22.9,1000,DROID,oracle,2026-08-18
+PnP-Color-v2,cosmos_nano,34.3,1000,DROID,oracle,2026-08-18
+Open-v1,cosmos_nano,32.0,1000,DROID,oracle,2026-08-18
+Close-v1,cosmos_nano,79.13,915,DROID,oracle,2026-08-18
+MolmoBot Combined,cosmos_nano,34.27,7000,DROID,oracle,2026-08-18

@@ -43,6 +43,7 @@ checkpoints/
 typings
 eval_output/
 experiment_output
+runs/
 
 
 mlspaces_tests/**/test_output
@@ -53,3 +54,10 @@ mlspaces_tests/**/test_data
 # pytest
 .pytest_cache/
 __pycache__/
+
+# Machine-specific symlink to $MLSPACES_ASSETS_DIR (see docs/eval_reproduction.md); the path
+# differs per machine, so it is created locally rather than committed.
+/assets
+
+# Per-request perception/planning dumps written by the TiPToP server next to its cwd.
+tiptop_server_outputs/
