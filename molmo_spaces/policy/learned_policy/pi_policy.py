@@ -33,6 +33,7 @@ class PI_Policy(InferencePolicy, StatefulPolicy):
         self.grasping_type = exp_config.policy_config.grasping_type
         self.chunk_size = exp_config.policy_config.chunk_size
         self.grasping_threshold = exp_config.policy_config.grasping_threshold
+        self.camera_names = exp_config.policy_config.camera_names
         self.model = None  # don't init model till inference to allow multiprocessing
 
     def get_state(self):
@@ -125,14 +126,20 @@ class PI_Policy(InferencePolicy, StatefulPolicy):
             obs = obs[0]
 
         grip = np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)
-        exo_camera_key = (
-            "droid_shoulder_light_randomization"
-            if "droid_shoulder_light_randomization" in obs
-            else "exo_camera_1"
-        )
-        wrist_camera_key = (
-            "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
-        )
+        if self.camera_names != ["exo_camera_1", "wrist_camera"]:
+            # Explicit override (e.g. --camera_names for Pick-v2-RandCam): trust it rather
+            # than auto-detecting, since MuJoCo renders every camera in the benchmark's full
+            # camera set regardless of which one the policy is meant to read.
+            exo_camera_key, wrist_camera_key = self.camera_names[0], self.camera_names[1]
+        else:
+            exo_camera_key = (
+                "droid_shoulder_light_randomization"
+                if "droid_shoulder_light_randomization" in obs
+                else "exo_camera_1"
+            )
+            wrist_camera_key = (
+                "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
+            )
         model_input = {
             "observation/exterior_image_1_left": resize_with_pad(obs[exo_camera_key], 224, 224),
             "observation/wrist_image_left": resize_with_pad(obs[wrist_camera_key], 224, 224),

@@ -11,6 +11,9 @@ class PiPolicyConfig(BasePolicyConfig):
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     chunk_size: int = 8
+    # [exo_camera_key, wrist_camera_key]. eval_main.py's --camera_names override writes here;
+    # PI_Policy.obs_to_model_input reads it when it differs from this default.
+    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
 
     policy_cls: type = None
     policy_factory: PolicyFactory | None = None
@@ -26,9 +29,98 @@ class PiPolicyConfig(BasePolicyConfig):
             self.policy_factory = make_lenient(PI_Policy)
 
 
+class MolmoAct2PolicyConfig(BasePolicyConfig):
+    checkpoint_path: str = "allenai/MolmoAct2-DROID"
+    remote_config: dict | None = dict(host="localhost", port=8000)
+    grasping_type: str = "binary"
+    grasping_threshold: float = 0.5
+    # `num_steps` is the flow-matching *integration* step count sent to the server (a
+    # sampler-quality/compute knob forwarded straight to predict_action(); the server's own
+    # DEFAULT_NUM_STEPS is 10). It is NOT the action-chunk length -- an earlier version of
+    # this config conflated the two, which silently capped the executed chunk at 10.
+    num_steps: int = 10
+    # How many actions of each returned chunk to execute open-loop before re-querying. The
+    # checkpoint's own norm_stats.json declares `action_horizon: 15` / `n_action_steps: 15`
+    # under the franka_droid tag, and the policy zoo's closest analogue
+    # (MolmoBotDroidPolicyConfig) likewise carries this as its own separate `action_horizon`
+    # field rather than reusing a sampler knob.
+    action_horizon: int = 15
+    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
+
+    policy_cls: type = None
+    policy_factory: PolicyFactory | None = None
+    policy_type: str = "learned"
+
+    def model_post_init(self, __context) -> None:
+        """Set policy_cls after initialization to avoid circular imports."""
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.learned_policy.molmoact2_policy import MolmoAct2Policy
+
+            self.policy_cls = MolmoAct2Policy
+            self.policy_factory = make_lenient(MolmoAct2Policy)
+
+
+class CosmosPolicyConfig(BasePolicyConfig):
+    # Default to Edge (4B, faster); switch to Nano (16B) by pointing checkpoint_path at
+    # "nvidia/Cosmos3-Nano-Policy-DROID" and remote_config at cosmos_nano's port instead --
+    # see docs/eval_reproduction.md for why these are two separate registered policies, not
+    # a single one with a variant flag.
+    checkpoint_path: str = "nvidia/Cosmos3-Edge-Policy-DROID"
+    remote_config: dict | None = dict(host="localhost", port=8003)
+    grasping_type: str = "binary"
+    grasping_threshold: float = 0.5
+    # The server's own action_chunk_size defaults to 32; re-querying at 8 (matching pi0.5's
+    # own chunk_size and the tuning already validated for this exact checkpoint family in a
+    # sibling project) limits open-loop drift without needing every chunk step.
+    chunk_size: int = 8
+    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
+
+    policy_cls: type = None
+    policy_factory: PolicyFactory | None = None
+    policy_type: str = "learned"
+
+    def model_post_init(self, __context) -> None:
+        """Set policy_cls after initialization to avoid circular imports."""
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.learned_policy.cosmos_policy import Cosmos_Policy
+
+            self.policy_cls = Cosmos_Policy
+            self.policy_factory = make_lenient(Cosmos_Policy)
+
+
+class TiptopPolicyConfig(BasePolicyConfig):
+    """Ported from allenai/molmospaces_policy_zoo's molmospaces_zoo/tiptop/config.py."""
+
+    policy_type: str = "tamp"
+    remote_config: dict = dict(host="localhost", port=8765, max_retries=5)
+
+    # TiPToP requires depth from the wrist camera.
+    force_enable_depth: bool = True
+
+    # Arm moves here before the image capture that is sent to the TiPToP server.
+    # Set to a list of 7 joint angles (radians) to enable; None disables the feature.
+    cam_obs_qpos: list[float] | None = None
+    # Number of interpolation steps to reach cam_obs_qpos (each step = one policy dt).
+    cam_obs_n_steps: int = 200
+
+    policy_cls: type = None
+    policy_factory: PolicyFactory | None = None
+
+    def model_post_init(self, __context) -> None:
+        """Set policy_cls after initialization to avoid circular imports."""
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.learned_policy.tiptop_policy import TiptopPolicy
+
+            self.policy_cls = TiptopPolicy
+            self.policy_factory = make_lenient(TiptopPolicy)
+
+
 class DreamZeroPolicyConfig(BasePolicyConfig):
     checkpoint_path: str = "checkpoints/dreamzero"
-    remote_config: dict = dict(host="localhost", port=0000)
+    remote_config: dict = dict(host="localhost", port=5000)
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     chunk_size: int = 24
