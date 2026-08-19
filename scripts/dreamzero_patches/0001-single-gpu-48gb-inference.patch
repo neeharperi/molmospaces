@@ -1,0 +1,309 @@
+Single-GPU-class inference for DreamZero-DROID (14B) on 48 GB cards.
+
+Measured footprint: weights are 42.70 GiB (DiT 30.70, umt5-xxl text encoder 10.58, CLIP image
+encoder 1.18, VAE 0.24). Each inference spikes ~10 GiB transiently, and the KV cache grows ~2.7
+GiB per chunk toward a ~6.5 GiB steady state (max_attention_size = 9 blocks x 880 tokens). Stock,
+that peaks near 47.5 GiB against ~46.2 GiB usable and OOMs on the third inference of an episode.
+
+Changes:
+
+1. base_vla.py -- route inputs to action_head._device rather than PreTrainedModel.device.
+   self.device is next(self.parameters()).device, which aliases the text encoder's
+   token_embedding, so parking that encoder on CPU dragged every input to CPU and raised
+   "index is on cpu, different from other tensors on cuda:0".
+
+2. wan_flow_matching_action_tf.py -- memoize the prompt embedding (a pure function of the token
+   ids) and evict the 10.58 GiB text encoder to CPU.
+
+3. wan_flow_matching_action_tf.py -- evict the CLIP image encoder after the once-per-episode
+   encode_image() call; its outputs are cached in clip_feas/ys for the rest of the episode.
+
+Both encoders are pulled back on demand, so a changed instruction or a reset still works. Neither
+is torch.compile'd when offloading is on: reduce-overhead captures CUDA graphs holding raw
+pointers into parameter storage, which moving those params to CPU would invalidate.
+
+4. Pipeline-shard the last N DiT blocks onto a second GPU (DREAMZERO_DIT_SPLIT=N, default 0 =
+   off). Each moved block frees ~0.93 GiB on the primary GPU (weights plus its slice of the KV
+   cache). The block loop carries activations across the device boundary -- one transfer per
+   forward with a single tail shard, not one per block -- and returns x to the primary device for
+   action_decoder/head. _create_kv_caches allocates each block's cache on its own block's device,
+   since the cache is a plain list of per-block tensors. This preserves max_chunk_size=4, i.e. the
+   trained attention window; the alternative (lowering max_chunk_size) shrinks it and changes
+   model behaviour.
+
+5. socket_test_optimized_AR.py -- DREAMZERO_DISABLE_DREAM_VIDEO=1 skips the model's own generated
+   "dream" MP4s. That only skips a vae.decode used to write those files; the action path is
+   untouched.
+
+Base commit: ab790c198fbce33503358efbbd4187ce9a89adf3
+
+diff --git a/groot/vla/model/dreamzero/action_head/wan_flow_matching_action_tf.py b/groot/vla/model/dreamzero/action_head/wan_flow_matching_action_tf.py
+index b7cd806..1ea67cd 100644
+--- a/groot/vla/model/dreamzero/action_head/wan_flow_matching_action_tf.py
++++ b/groot/vla/model/dreamzero/action_head/wan_flow_matching_action_tf.py
+@@ -205,6 +205,20 @@ class WANPolicyHead(ActionHead):
+         
+         self._device = "cuda"
+         self.dynamic_cache_schedule = os.getenv("DYNAMIC_CACHE_SCHEDULE", "False").lower() == "true"
++        # umt5-xxl is 11.4 GB of the ~44.6 GB resident footprint, but the instruction is constant
++        # for a whole episode and the negative prompt is a literal constant -- so the encoder is
++        # only needed on a cache miss. Encode once, cache, and evict it to CPU.
++        self.offload_text_encoder = os.getenv(
++            "DREAMZERO_OFFLOAD_TEXT_ENCODER", "1").lower() in ("1", "true", "yes")
++        self._text_encoder_offloaded = False
++        self._prompt_emb_cache = {}
++        # The CLIP image encoder is only touched when current_start_frame == 0 -- its output is
++        # cached in self.clip_feas/self.ys for the rest of the episode -- so it is dead weight on
++        # the GPU for every later chunk. Evicting it frees the headroom the KV cache needs as it
++        # grows toward max_attention_size over the first ~9 chunks.
++        self.offload_image_encoder = os.getenv(
++            "DREAMZERO_OFFLOAD_IMAGE_ENCODER", "1").lower() in ("1", "true", "yes")
++        self._image_encoder_offloaded = False
+ 
+ 
+         num_dit_steps = 8
+@@ -496,12 +510,18 @@ class WANPolicyHead(ActionHead):
+         head_dim = self.model.dim // num_heads
+         kv_cache1: KVCacheType = []
+         kv_cache_neg: KVCacheType = []
+-        for _ in range(self.model.num_layers):
++        for _layer in range(self.model.num_layers):
++            # With a sharded DiT each block's cache must live on that block's device, otherwise
++            # the first torch.cat inside the block raises a cross-device error.
++            try:
++                _dev = next(self.model.blocks[_layer].parameters()).device
++            except (AttributeError, IndexError, StopIteration):
++                _dev = device
+             kv_cache1.append(
+-                torch.zeros([2, batch_size, 0, num_heads, head_dim], dtype=dtype, device=device),
++                torch.zeros([2, batch_size, 0, num_heads, head_dim], dtype=dtype, device=_dev),
+             )
+             kv_cache_neg.append(
+-                torch.zeros([2, batch_size, 0, num_heads, head_dim], dtype=dtype, device=device),
++                torch.zeros([2, batch_size, 0, num_heads, head_dim], dtype=dtype, device=_dev),
+             )
+ 
+         return kv_cache1, kv_cache_neg
+@@ -540,11 +560,22 @@ class WANPolicyHead(ActionHead):
+         return image
+ 
+     def encode_prompt(self, input_ids, attention_mask):
++        # Pure function of the token ids -- safe to memoize. Keyed on the ids themselves so a
++        # changed instruction is a miss rather than a stale hit.
++        cache = self._prompt_emb_cache
++        key = tuple(input_ids.reshape(-1).tolist())
++        if key in cache:
++            return cache[key]
++        if self._text_encoder_offloaded:
++            print("Prompt cache miss; reloading the text encoder onto the GPU.")
++            self.text_encoder.to(device=self._device)
++            self._text_encoder_offloaded = False
+         seq_lens = attention_mask.gt(0).sum(dim=1).long()
+         prompt_emb = self.text_encoder(input_ids, attention_mask)
+         prompt_emb = prompt_emb.clone().to(dtype=torch.bfloat16)
+         for i, v in enumerate(seq_lens):
+             prompt_emb[:, v:] = 0
++        cache[key] = prompt_emb
+         return prompt_emb
+ 
+     def _ensure_vae_on_device(self, ref_tensor):
+@@ -561,6 +592,10 @@ class WANPolicyHead(ActionHead):
+         return latents
+ 
+     def encode_image(self, image, num_frames, height, width):
++        if self._image_encoder_offloaded:
++            print("Image encoder needed again; reloading onto the GPU.")
++            self.image_encoder.to(device=self._device)
++            self._image_encoder_offloaded = False
+         with torch.amp.autocast(dtype=torch.bfloat16, device_type=torch.device(self._device).type):
+             batch_size = image.shape[0]
+             clip_context = self.image_encoder.encode_image(image)
+@@ -1051,6 +1086,16 @@ class WANPolicyHead(ActionHead):
+         text_inputs = self._prepare_text_inputs(data)
+         prompt_embs = [self.encode_prompt(text, attention_mask) for text, attention_mask in text_inputs]
+ 
++        # Both prompts are cached now; the encoder is dead weight on a 48 GB card. Evicting it
++        # frees ~11.4 GB, which is what makes the VAE encode below fit. encode_prompt() pulls it
++        # back if the instruction ever changes.
++        if self.offload_text_encoder and not self._text_encoder_offloaded:
++            self.text_encoder.to(device="cpu")
++            self._text_encoder_offloaded = True
++            torch.cuda.empty_cache()
++            print(f"Text encoder offloaded to CPU. allocated now "
++                  f"{torch.cuda.memory_allocated()/2**30:.2f} GiB", flush=True)
++
+         end_text_encoder_event.record()
+         
+         start_image_encoder_event.record()
+@@ -1066,6 +1111,14 @@ class WANPolicyHead(ActionHead):
+             clip_feas, ys, image = self.encode_image(image, self.num_frames, height, width)
+             self.clip_feas = clip_feas.to(dtype=image.dtype)
+             self.ys = ys.to(dtype=image.dtype)
++            # Its output is cached for the whole episode now, so the encoder itself is no longer
++            # needed on device. encode_image() pulls it back if a reset asks for it again.
++            if self.offload_image_encoder and not self._image_encoder_offloaded:
++                self.image_encoder.to(device="cpu")
++                self._image_encoder_offloaded = True
++                torch.cuda.empty_cache()
++                print(f"Image encoder offloaded to CPU. allocated now "
++                      f"{torch.cuda.memory_allocated()/2**30:.2f} GiB", flush=True)
+         
+         assert self.clip_feas is not None and self.ys is not None, "clip_feas and ys must be set"
+ 
+@@ -1352,6 +1405,23 @@ class WANPolicyHead(ActionHead):
+         # Move models to the cuda device and set the dtype to bfloat16.
+         print("Moving models to the cuda device and setting the dtype to bfloat16.")
+         self.model.to(device=self._device, dtype=torch.bfloat16)
++        # Pipeline-shard a tail of the DiT blocks onto a second GPU. The 14B DiT is 30.7 GiB and
++        # its KV cache grows to ~6.5 GiB at max_chunk_size=4; with a ~10 GiB transient spike per
++        # inference that overruns a single 48 GB card partway through an episode. Each moved block
++        # frees ~0.93 GiB on the primary GPU (weights + its slice of the cache).
++        import os as _os  # `os` is rebound as a local later in this function
++        self._dit_split = int(_os.getenv("DREAMZERO_DIT_SPLIT", "0"))
++        if self._dit_split > 0:
++            if torch.cuda.device_count() < 2:
++                print("DREAMZERO_DIT_SPLIT set but only one GPU visible; ignoring.", flush=True)
++                self._dit_split = 0
++            else:
++                self._shard_device = torch.device("cuda:1")
++                for blk in self.model.blocks[-self._dit_split:]:
++                    blk.to(device=self._shard_device)
++                torch.cuda.empty_cache()
++                print(f"Sharded the last {self._dit_split} of {len(self.model.blocks)} DiT blocks "
++                      f"onto {self._shard_device}.", flush=True)
+         self.text_encoder.to(device=self._device, dtype=torch.bfloat16)
+         self.image_encoder.to(device=self._device, dtype=torch.bfloat16)
+         self.vae.to(device=self._device, dtype=torch.bfloat16)
+@@ -1364,13 +1434,20 @@ class WANPolicyHead(ActionHead):
+         if not ENABLE_TENSORRT:
+             print("Torch compiling the TextEncoder, ImageEncoder, and VAE modules (Wan _forward_blocks not compiled).")
+ 
+-            self.text_encoder.forward = torch.compile(
+-                mode="reduce-overhead", fullgraph=True, dynamic=False,
+-            )(self.text_encoder.forward)
+-
+-            self.image_encoder.model.visual.forward = torch.compile(
+-                mode="reduce-overhead", fullgraph=True, dynamic=False,
+-            )(self.image_encoder.model.visual.forward)
++            # reduce-overhead captures CUDA graphs that hold raw pointers into the parameter
++            # storages; moving those params to CPU afterwards would be a use-after-free on replay.
++            # We only run this on a cache miss anyway, so compiling it buys nothing.
++            if not self.offload_text_encoder:
++                self.text_encoder.forward = torch.compile(
++                    mode="reduce-overhead", fullgraph=True, dynamic=False,
++                )(self.text_encoder.forward)
++
++            # Same use-after-free hazard as the text encoder: reduce-overhead CUDA graphs hold
++            # raw pointers into parameter storage, which offloading to CPU would invalidate.
++            if not self.offload_image_encoder:
++                self.image_encoder.model.visual.forward = torch.compile(
++                    mode="reduce-overhead", fullgraph=True, dynamic=False,
++                )(self.image_encoder.model.visual.forward)
+ 
+             self.vae.model.encode = torch.compile(
+                 mode="reduce-overhead", fullgraph=True, dynamic=False,
+diff --git a/groot/vla/model/dreamzero/base_vla.py b/groot/vla/model/dreamzero/base_vla.py
+index 274b864..30e7717 100644
+--- a/groot/vla/model/dreamzero/base_vla.py
++++ b/groot/vla/model/dreamzero/base_vla.py
+@@ -244,13 +244,21 @@ class VLA(PreTrainedModel):
+         backbone_inputs = self.backbone.prepare_input(inputs)
+         action_inputs = self.action_head.prepare_input(inputs)
+ 
++        # NB: do not use self.device here. PreTrainedModel.device is
++        # next(self.parameters()).device, which resolves to
++        # action_head.text_encoder.token_embedding.weight -- so the moment the text encoder is
++        # parked on CPU, every input silently follows it and the first GPU weight it meets raises
++        # "index is on cpu, different from other tensors on cuda:0". The action head knows the
++        # real compute device; ask it.
++        compute_device = torch.device(getattr(self.action_head, "_device", None) or self.device)
++
+         def to_device_with_maybe_dtype(x):
+             # Only cast to self.compute_dtype if the tensor is floating
+             if torch.is_floating_point(x):
+-                return x.to(self.device, dtype=self.action_head.dtype)
++                return x.to(compute_device, dtype=self.action_head.dtype)
+             else:
+                 # Keep original dtype
+-                return x.to(self.device)
++                return x.to(compute_device)
+ 
+         backbone_inputs = tree.map_structure(to_device_with_maybe_dtype, backbone_inputs)
+         action_inputs = tree.map_structure(to_device_with_maybe_dtype, action_inputs)
+diff --git a/groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py b/groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py
+index c5e2528..4dece28 100644
+--- a/groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py
++++ b/groot/vla/model/dreamzero/modules/wan_video_dit_action_casual_chunk.py
+@@ -1794,19 +1794,44 @@ class CausalWanModel(ModelMixin, ConfigMixin):
+             context = torch.cat([clip_embedding, context], dim=1)
+ 
+         updated_kv_caches: list[torch.Tensor] = []
++        # Blocks may be pipeline-sharded across GPUs (DREAMZERO_DIT_SPLIT). Carry the activations
++        # to each block's device as we cross the boundary; with a single tail shard this is one
++        # transfer per forward, not one per block. Everything after this loop (action_decoder,
++        # head, and `e`) stays on the primary device, so x is returned there.
++        _home_device = x.device
++        _cur_device = None
++        _e0, _ctx, _freqs = e0, context, freqs
++        _fa, _fs = self.freqs_action, self.freqs_state
+         for block_index, block in enumerate(self.blocks):
++            try:
++                _dev = next(block.parameters()).device
++            except StopIteration:
++                _dev = _cur_device or _home_device
++            if _dev != _cur_device:
++                x = x.to(_dev)
++                _e0 = e0.to(_dev) if torch.is_tensor(e0) else e0
++                _ctx = context.to(_dev) if torch.is_tensor(context) else context
++                _freqs = freqs.to(_dev) if torch.is_tensor(freqs) else freqs
++                _fa = self.freqs_action.to(_dev) if torch.is_tensor(self.freqs_action) else self.freqs_action
++                _fs = self.freqs_state.to(_dev) if torch.is_tensor(self.freqs_state) else self.freqs_state
++                _cur_device = _dev
++            _kvc = kv_cache[block_index]
++            if torch.is_tensor(_kvc) and _kvc.device != _dev:
++                _kvc = _kvc.to(_dev)
+             x, updated_kv_cache = block(
+                 x=x,
+-                e=e0,
+-                freqs=freqs,
+-                freqs_action=self.freqs_action,
+-                freqs_state=self.freqs_state,
+-                context=context,
++                e=_e0,
++                freqs=_freqs,
++                freqs_action=_fa,
++                freqs_state=_fs,
++                context=_ctx,
+                 action_register_length=action_register_length,
+-                kv_cache=kv_cache[block_index],
++                kv_cache=_kvc,
+                 current_start_frame=current_start_frame,
+             )
+             updated_kv_caches.append(updated_kv_cache)
++        if x.device != _home_device:
++            x = x.to(_home_device)
+ 
+         if action is not None:
+             action_noise_pred = x[:, seq_len: seq_len + action_length]
+diff --git a/socket_test_optimized_AR.py b/socket_test_optimized_AR.py
+index 5b93e05..9ea5576 100644
+--- a/socket_test_optimized_AR.py
++++ b/socket_test_optimized_AR.py
+@@ -782,8 +782,15 @@ def main(args: Args) -> None:
+         date_suffix = datetime.datetime.now().strftime("%Y%m%d")
+         checkpoint_name = os.path.basename(model_path)
+         output_dir = os.path.join(parent_dir, f"real_world_eval_gen_{date_suffix}_{args.index}", checkpoint_name)
+-        os.makedirs(output_dir, exist_ok=True)
+-        logging.info("Videos will be saved to: %s", output_dir)
++        if os.getenv("DREAMZERO_DISABLE_DREAM_VIDEO", "0").lower() in ("1", "true", "yes"):
++            # The model's own generated "dream" MP4s are not part of PolaRiS evaluation -- eval.py
++            # records the real sim rollout. Skipping them drops the periodic vae.decode spike and
++            # the latent buffer, which is VRAM the KV cache needs.
++            output_dir = None
++            logging.info("Dream-video saving disabled (DREAMZERO_DISABLE_DREAM_VIDEO=1)")
++        else:
++            os.makedirs(output_dir, exist_ok=True)
++            logging.info("Videos will be saved to: %s", output_dir)
+     else:
+         output_dir = None
+         logging.info(f"Rank {rank} starting as worker for distributed inference...")
