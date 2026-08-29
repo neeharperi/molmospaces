@@ -1306,3 +1306,85 @@ things that did not exist before.
    keys on log silence rather than TCP reachability, which is the signal that would have caught
    campaign 1's 8-hour hang -- there the server had died and been restarted while the client
    retried forever, so the port was open the whole time.
+
+## The rendering stack: neither renderer worked on this host, and the cause was not in this repo
+
+Worth reading before debugging any "policy scores 0%" result here, because the failure mode is
+an exception at context creation rather than a bad number, and because the fix lives outside
+the repo entirely.
+
+**Diagnosis.** This machine's NVIDIA driver is a **compute-only install**: `nvidia-utils-570`
+is present -- CUDA works, `nvidia-smi` works, torch sees four H100 NVLs at sm_90 -- but
+`libnvidia-gl-570` is not. So the host has no `libEGL_nvidia.so`, no EGL vendor ICD under
+`/usr/share/glvnd/egl_vendor.d/`, no Vulkan ICD (`/usr/share/vulkan/icd.d/` does not exist) and
+no Vulkan loader. The only EGL vendor installed is Mesa, whose devices are DRM nodes under
+`/dev/dri` -- and those are `root:video` / `root:render` mode 0660 while this user is in
+neither group. Net effect:
+
+- **classic**: `ImportError: Cannot initialize a EGL device display. This likely means that
+  your EGL driver does not support the PLATFORM_DEVICE extension`, preceded by
+  `libEGL warning: failed to open /dev/dri/renderD131: Permission denied`.
+- **filament**: could not have started at all -- it is a Vulkan backend and there was no ICD
+  and no loader.
+
+**Docker does not fix this**, which is worth stating because it looks like it should:
+`nvidia-container-toolkit` bind-mounts the *host* driver's userspace into the container, so a
+container on a compute-only host has no EGL or Vulkan either. Verified directly with
+`--gpus all -e NVIDIA_DRIVER_CAPABILITIES=all`: four GPUs visible, zero GL libraries.
+
+**Fix, and it needs no root.** Driver userspace libraries are ordinary files whose only hard
+requirement is matching the running kernel module. `scripts/install_nvidia_gl.sh` unpacks
+`libnvidia-gl-570` (pinned to the running driver, asserted before extraction) and `libvulkan1`
+with `dpkg -x` into `$HOME/nvidia-gl`, and `scripts/nvidia_gl_env.sh` points the standard
+loader variables at them:
+
+```
+LD_LIBRARY_PATH=$HOME/nvidia-gl/usr/lib/x86_64-linux-gnu
+__EGL_VENDOR_LIBRARY_FILENAMES=$HOME/nvidia-gl/usr/share/glvnd/egl_vendor.d/10_nvidia.json
+VK_ICD_FILENAMES=$HOME/nvidia-gl/usr/share/vulkan/icd.d/nvidia_icd.json
+```
+
+The version assertion is load-bearing: a mismatched `libnvidia-eglcore` does not fail at load,
+it fails later at context creation with an opaque `EGLError`. Wired in via `activate.d` hooks
+on both harness envs *and* in `run_full_matrix.sh`, so no invocation path depends on anyone
+remembering it. Both renderers verified working afterwards; filament reports
+`FEngine resolved backend: Vulkan` / `Vulkan device driver: NVIDIA 570.207`.
+
+### EGL device mapping: identity here, but only because it was measured
+
+`MUJOCO_EGL_DEVICE_ID` indexes straight into `eglQueryDevicesEXT()`
+(`molmo_spaces/renderer/opengl_context.py:39`), and what that returns depends on which vendor
+is loaded. Under Mesa it enumerated five devices -- four GPUs plus the BMC VGA at `02:00.0`,
+which has a primary node but no render node -- in **reverse** order. Under the NVIDIA vendor it
+enumerates exactly four, and the mapping is **identity**, measured by allocating on each device
+and reading `nvidia-smi`, not inferred.
+
+`scripts/probe_egl_mapping.py` now measures rather than infers, because under the NVIDIA vendor
+the devices are not DRM devices (so the `/dev/dri/by-path` lookup resolves nothing) and the
+CUDA-ordinal extension cannot be queried before a display is initialized -- which is circular,
+since choosing the display is what the probe exists to inform. It caches to
+`runs/_egl_mapping.txt`.
+
+It also no longer claims identity when nothing resolved. The first version's check was
+`all(... for ... if s != "?")` over an all-`"?"` list, which is vacuously `True` -- so it
+confidently printed "Mapping is IDENTITY" for a Mesa enumeration that was actually reversed.
+A probe that fabricates a plausible answer is worse than one that fails.
+
+### Filament ignores every device-selection knob
+
+Measured: with `MUJOCO_EGL_DEVICE_ID=2`, with `CUDA_VISIBLE_DEVICES=2`, and with both set to 3,
+filament rendered on the **same** physical GPU every time. `MUJOCO_EGL_DEVICE_ID` is an EGL
+variable and filament is Vulkan; the Vulkan loader (1.3.204) exposes only `VK_LOADER_DEBUG` and
+`VK_LOADER_DISABLE_INST_EXT_FILTER`, NVIDIA's ICD exposes only the PRIME offload variables, and
+mujoco's filament build exposes no device index. There is no knob.
+
+**Consequence for the campaign**: during a filament phase, every lane's rendering concentrates
+on one card regardless of `LANE_GPU`, while the policy servers stay where the lane table puts
+them. This is throughput, not correctness.
+
+**And the reference's filament worker cap does not hold here.** That campaign ran filament at
+`--num_workers 1` because 4 concurrent Vulkan contexts exhausted GPU handles on its 48 GB RTX
+PRO 5000s. On these H100s, **8 concurrent filament contexts were verified working** -- 8/8
+succeeded, no errors, no `HandleAllocator arena is full` warning. Since the five filament tasks
+are roughly 85% of the campaign's wall-clock, raising that cap is the single biggest scheduling
+lever available, and it should be re-tested against a real eval cell rather than inherited.
