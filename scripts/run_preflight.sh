@@ -18,6 +18,20 @@ PHASE="${1:?usage: run_preflight.sh <classic|filament>}"
 DATE_TAG="${DATE_TAG:?set DATE_TAG}"
 CLASSIC_WORKERS="${CLASSIC_WORKERS:-4}"
 FILAMENT_WORKERS="${FILAMENT_WORKERS:-4}"
+
+# Per-policy worker override. The worker count must not exceed what the policy's SERVER can
+# actually serve concurrently, or the extra workers do not add throughput -- they add
+# handshake contention, and lost episodes.
+#
+# dreamzero: its server runs --nproc_per_node=1, i.e. exactly one inference at a time. Four
+# eval workers against it produced 660 handshake timeouts and, after the client's 5-attempt
+# give-up, 5 SKIPPED episodes in a single cell. Skipped episodes silently shrink a cell that
+# is supposed to be the benchmark's full episode set, which is precisely what makes a number
+# non-comparable to the leaderboard. One worker per inference slot.
+declare -A POLICY_WORKERS=( [dreamzero]=1 )
+workers_for() {  # $1 = policy, $2 = default
+    echo "${POLICY_WORKERS[$1]:-$2}"
+}
 EGL_MAP="runs/_egl_mapping.txt"
 egl_for() { awk -v g="$1" '$1 !~ /^#/ && $1 == g {print $2}' "$EGL_MAP"; }
 
@@ -46,9 +60,9 @@ CELLS=(
 mkdir -p runs/_lanes
 for spec in "${CELLS[@]}"; do
     IFS=':' read -r policy gpu classic filament <<< "$spec"
-    tasks="$classic"; env_name=mlspaces-classic; workers="$CLASSIC_WORKERS"
+    tasks="$classic"; env_name=mlspaces-classic; workers="$(workers_for "$policy" "$CLASSIC_WORKERS")"
     if [ "$PHASE" = "filament" ]; then
-        tasks="$filament"; env_name=mlspaces-filament; workers="$FILAMENT_WORKERS"
+        tasks="$filament"; env_name=mlspaces-filament; workers="$(workers_for "$policy" "$FILAMENT_WORKERS")"
     fi
     [ -n "$tasks" ] || { echo "  $policy: no $PHASE pre-flight cell (no leaderboard entry)"; continue; }
     egl="$(egl_for "$gpu")"

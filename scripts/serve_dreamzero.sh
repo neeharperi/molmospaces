@@ -9,7 +9,9 @@ cd "$(dirname "$0")/.."
 PORT="${PORT:-5000}"
 GPUS="${GPUS:-1,0}"  # order matters: index 0 (primary, full resident weights) gets the listed
                       # GPU that has the most headroom free at launch time.
-DIT_SPLIT="${DIT_SPLIT:-12}"
+# 0, not 12: the split exists only to fit a 48 GB card and costs a documented ~20% in
+# throughput. At 95 GB the model is resident on one GPU.
+DIT_SPLIT="${DIT_SPLIT:-0}"
 MODEL="${MODEL:-$PWD/third_party/dreamzero/checkpoints/DreamZero-DROID}"
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
@@ -27,8 +29,14 @@ export CUDA_HOME
 # The reduce-overhead compiles of the image encoder and VAE hold ~5 GB in CUDA-graph private
 # pools; disabled here to keep the memory instead of the ~compile speedup.
 export TORCHDYNAMO_DISABLE="${TORCHDYNAMO_DISABLE:-1}"
-export DREAMZERO_OFFLOAD_TEXT_ENCODER="${DREAMZERO_OFFLOAD_TEXT_ENCODER:-1}"
-export DREAMZERO_OFFLOAD_IMAGE_ENCODER="${DREAMZERO_OFFLOAD_IMAGE_ENCODER:-1}"
+# Encoder offloading defaults OFF here, unlike the 48 GB-card tuning these defaults came from.
+# Evicting the 10.58 GB text encoder and 1.18 GB image encoder to CPU between uses is what let
+# this model fit on a 48 GB card at all; on a 95 GB H100 with the DiT unsharded the server
+# sits at ~33 GiB, so the eviction buys nothing and costs a reload per inference -- measured at
+# 1531 image-encoder reloads in a single Open-v1 cell. Purely a speed change: the weights and
+# the arithmetic are identical whether they live on the GPU or get copied there each call.
+export DREAMZERO_OFFLOAD_TEXT_ENCODER="${DREAMZERO_OFFLOAD_TEXT_ENCODER:-0}"
+export DREAMZERO_OFFLOAD_IMAGE_ENCODER="${DREAMZERO_OFFLOAD_IMAGE_ENCODER:-0}"
 export DREAMZERO_DIT_SPLIT="$DIT_SPLIT"
 export DREAMZERO_DISABLE_DREAM_VIDEO="${DREAMZERO_DISABLE_DREAM_VIDEO:-1}"
 
