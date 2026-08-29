@@ -1467,3 +1467,27 @@ Moved to `runs/_handshake/<policy>/<task>/`, matching campaign 1's own conventio
 underscore keeps them out of the policy-name glob, the same way `_INVALID` / `_STALE` /
 `_superseded` directories are skipped by `check_provenance.py`. Any future smoke or debug cell
 belongs under a leading-underscore directory for the same reason.
+
+### Running results (campaign 2, full coverage, `--date 20260828_full`)
+
+| task | policy | ours (n) | leaderboard | verdict | note |
+|---|---|---|---|---|---|
+| Pick-v2-classic | `pi05_droid` | 8.00% (1000) | 6.38% | FAIL | marginal: 6.38 is 0.09pp below the interval. Reference machine got 8.70% on this cell; z=0.57 between machines. |
+| Pick-v2-classic | `molmoact2_droid` | 18.10% (999) | 20.50% | **PASS** | 1 episode lost to a transient HTTP `Connection aborted`; 0.1pp of the cell, cannot move the verdict. |
+
+**The MolmoAct2 PASS is the first real reproduction on this harness**, and it is worth more
+than its single cell suggests: it is an independent confirmation that the control-rate and
+action-horizon fixes campaign 1 landed (66.0 ms rather than 200.0; `action_horizon=15` split
+out from the sampler's `num_steps`) are correct. Campaign 1 measured 18.0% on this cell at
+n=50 after those fixes; we get 18.1% at n=999.
+
+It also sharpens the pi05 result. The two policies ran on the same harness, same assets, same
+renderer, the same night -- one lands inside its leaderboard interval and one misses upward.
+A harness-level defect would not be that selective, which is further evidence the pi05 gap is
+about *which checkpoint the published pi05 row was produced with* rather than about our wiring.
+
+Episode-count shortfalls are recorded rather than smoothed over: a cell is meant to evaluate
+the benchmark's own episode set, and n=999 of 1000 is a 0.1% miss worth naming even though it
+is far too small to matter here. The leaderboard's own pi05 counts vary the same way
+(997, 987, 985, 804...), so exact-n equality was never the bar; silent, unexplained shrinkage
+is what matters, and this one is explained.
