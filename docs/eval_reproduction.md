@@ -1424,3 +1424,46 @@ Two absolute paths *do* remain, and both are inert at inference:
 Both are NVIDIA-internal build paths, not the ones the reference saw, so this is a different
 checkpoint revision rather than a different machine. Verify at server start rather than
 assuming: a load-time failure here would name one of these paths.
+
+### First full-coverage cell: the port is verified, and the leaderboard miss reproduces
+
+`pi05_droid` / `Pick-v2-classic`, full coverage, no `--max_episodes`:
+
+| | success | Wilson 95% | hardware |
+|---|---|---|---|
+| campaign 1 (reference machine) | **8.70%** (87/1000) | [7.11, 10.61] | 2x RTX PRO 5000, sm_120 |
+| campaign 2 (this machine) | **8.00%** (80/1000) | [6.47, 9.85] | 4x H100 NVL, sm_90 |
+| leaderboard | 6.38% | — | — |
+
+**Two-proportion z between the machines is 0.57** -- statistically indistinguishable. That is
+the real headline. These two numbers come from different GPU architectures, different drivers,
+freshly built environments, a rendering stack assembled by hand out of unpacked driver
+packages, and a CUDA forward-compatibility shim. Getting the same answer across all of that is
+much stronger evidence that the port preserved behaviour than any package-list diff could be,
+and it is the behavioural check `docs/env_parity.md` says is worth more than package parity.
+
+**And the leaderboard miss reproduces, in the same direction and roughly the same size.**
+Campaign 1 recorded this cell as a FAIL at 8.70%; we get a FAIL at 8.00%. Ours is marginal --
+6.38% sits 0.09pp below our interval's lower bound -- but it is a miss in the same direction as
+every other full-coverage pi05 cell campaign 1 completed (Pick-v1.5 +5.6pp, Pick-v2-classic
++2.3pp, Pick-v2-filament +3.7pp, Pick-v2-RandCam +4.4pp).
+
+This is the pattern BENCHMARK.md said to watch for: *"if the remaining Group B cells also come
+in high, that is a systematic offset between this harness/checkpoint and the published run."*
+Two independent machines now show it. Integration bugs cost score rather than inflating it, so
+a consistent upward offset points at the comparison, not the wiring -- and the leaderboard's
+own `# run_path` headers give the candidate explanation: the published pi05 Group B numbers
+were produced by `PiPnPBenchmarkEvalConfig` against a `sim_cotraining_output` checkpoint on
+2026-03-24, which may not be `pi05_droid_jointpos` at all.
+
+### Handshake cells must be quarantined, not left in place
+
+`scripts/compare_to_leaderboard.py` globs `runs/<policy>/<task>/<date>/`, so the n=1 handshake
+cells were initially picked up as if they were results -- and every one of them "PASSED",
+because a Wilson interval at n=1 spans essentially the whole range. Six meaningless PASSes next
+to one real FAIL is a worse failure than no output at all, since it reads as broad agreement.
+
+Moved to `runs/_handshake/<policy>/<task>/`, matching campaign 1's own convention: the leading
+underscore keeps them out of the policy-name glob, the same way `_INVALID` / `_STALE` /
+`_superseded` directories are skipped by `check_provenance.py`. Any future smoke or debug cell
+belongs under a leading-underscore directory for the same reason.
