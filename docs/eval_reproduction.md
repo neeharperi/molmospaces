@@ -1491,3 +1491,40 @@ the benchmark's own episode set, and n=999 of 1000 is a 0.1% miss worth naming e
 is far too small to matter here. The leaderboard's own pi05 counts vary the same way
 (997, 987, 985, 804...), so exact-n equality was never the bar; silent, unexplained shrinkage
 is what matters, and this one is explained.
+
+### Multi-instance policy servers: tried, measured, reverted
+
+The campaign is bounded by its slowest policies -- measured per-episode rates with seven lanes
+running are pi05 18.0s, molmoact2 27.9s, cosmos_edge 44.9s, cosmos_nano 116.4s, pi0 122.6s,
+tiptop 174.3s, dreamzero 279.7s. Since lanes run in parallel, DreamZero alone sets the wall
+clock at roughly 25 days for a full 9-task row.
+
+DreamZero's server runs `--nproc_per_node=1`, so the obvious idea is to run several instances
+and give each eval worker its own. That was implemented (`utils.shard_port()` plus
+`MLSPACES_WORKER_ID` published per worker by `pipeline.py`), unit-checked, and measured live.
+
+**It made throughput slightly worse: 0.94x.**
+
+| configuration | inference time | combined throughput |
+|---|---|---|
+| 1 instance (GPU0, encoders resident) | 9.0 s | 0.111 inf/s |
+| 2 instances (GPU0 + GPU3) | 11.0 s and 17.9 s | 0.104 inf/s |
+
+Load actually sharded correctly -- 15 and 10 inferences to the two instances over a 240s
+window, so the routing works. The problem is that there was no spare compute to route to.
+**All four GPUs were already pinned at 100% utilisation.** A second instance does not add SMs;
+it splits the same ones and adds context-switching on top, which is exactly the 6% loss
+observed. Instance 1 slowing from 9.0s to 11.0s under the split is the same effect seen from
+the other side.
+
+Reverted to one instance per policy. The sharding code is kept: it is tested, it no-ops
+byte-identically at the default `MLSPACES_POLICY_INSTANCES=1`, and it becomes useful the moment
+this campaign runs on a machine with idle GPUs (or after the fast lanes finish and free
+capacity). What it is not is a way to conjure throughput out of a saturated device.
+
+**The generalisable lesson**: this campaign is GPU-bound, not concurrency-bound. Every
+remaining speedup idea of the form "run more of X at once" is subject to the same ceiling and
+should be measured against it before being built. The levers that DID work were the ones that
+removed wasted work rather than adding parallelism -- disabling encoder offload (1531 needless
+reloads per cell), unsharding the DiT, and matching worker count to the server's actual
+inference slots (which removed 660 handshake timeouts and 5 lost episodes).
