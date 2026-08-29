@@ -4,7 +4,9 @@ Frozen, committed reference data for the DROID-leaderboard reproduction effort
 (see `plans/BENCHMARK.md` and `docs/eval_reproduction.md`).
 
 - `leaderboard_snapshot.csv` — a point-in-time export of the public MolmoSpaces leaderboard,
-  filtered to the DROID embodiment. **Captured 2026-08-17.** The leaderboard page itself is a
+  filtered to the DROID embodiment. **Captured 2026-08-17 through 2026-08-19**, one policy
+  block at a time as each integration landed -- so `snapshot_date` varies by row and is
+  per-policy, not file-wide. The leaderboard page itself is a
   client-rendered JS app (not fetchable via plain HTTP), but the user found via browser
   DevTools that it loads static per-(task, policy) CSVs at
   `https://molmospaces.allen.ai/benchmark/data/<task_slug>/<policy_slug>.csv` (e.g.
@@ -36,8 +38,25 @@ Frozen, committed reference data for the DROID-leaderboard reproduction effort
   exact policy-column string -- compares each of our two real runs against this one
   ambiguous reference, rather than silently matching neither. Treat a PASS/FAIL for either
   as weaker evidence than the other policies' unambiguous comparisons until/unless the
-  variant is confirmed. MolmoAct2/DreamZero rows still need adding once those policies'
-  slugs are found (try `molmoact2`/`dreamzero` against the same task slugs). Columns:
+  variant is confirmed.
+  **molmoact2, captured 2026-08-19**: slug `molmoact2`, entries for all 9 tasks.
+  **dreamzero, captured 2026-08-19: slug `dreamzero`, and it has GROUP A ONLY.** `ms_open`
+  (246/990 = 24.85%) and `ms_close` (552/915 = 60.33%) return real CSVs; all 7 Group B slugs
+  return the SPA's HTML shell, the same 404 signature TiPToP shows on `ms_open`/`ms_close`.
+  So DreamZero has no MolmoBot-Combined entry and no Group B cell to compare against -- that
+  is a fact about the leaderboard, not a fetch failure, and it means DreamZero contributes
+  nothing to the Group B campaign. Note this is the mirror image of TiPToP's gap: between the
+  two of them, every one of the 9 tasks has at least one policy with no reference number.
+  Every policy's rows are now captured; nothing further is outstanding here.
+
+  **`n_episodes` is not measured the same way for every policy block, and it matters for any
+  n-weighted comparison.** `pi05_droid`'s counts are the real per-file totals from each
+  leaderboard CSV (997, 987, 985, 804, 541, 322, 961, 1000, 915; Combined 5597), so they vary
+  per task the way real evaluation sets do. The `tiptop`/`molmoact2_droid`/`cosmos_*` blocks
+  are uniformly 1000 for the 8 non-Close tasks, 915 for Close-v1 and exactly 7000 for
+  Combined -- i.e. the "fall back to the benchmark JSON's own episode count" substitution this
+  README requires be noted below, applied without being noted at the time. Recorded now.
+  `dreamzero`'s two rows are real per-file totals (990, 915). Columns:
   `task,policy,success_rate,n_episodes,embodiment,metric,snapshot_date`
   - `task`: one of this repo's 9 task names (see `scripts/eval_common.py`'s `TASKS`), plus one
     row per policy named `MolmoBot Combined` for the Group B pooled aggregate.
@@ -51,5 +70,8 @@ Frozen, committed reference data for the DROID-leaderboard reproduction effort
 - `pinned_assets_<date>.json` — a frozen dump of `DATA_TYPE_TO_SOURCE_TO_VERSION` from
   `molmo_spaces.molmo_spaces_constants`, taken right after the first asset install. Referenced
   by `$MLSPACES_PINNED_ASSETS_FILE` so every eval run in this campaign uses the same asset
-  versions even if upstream defaults drift later. **Not yet captured** — created during the
-  harness environment setup step in `docs/eval_reproduction.md`.
+  versions even if upstream defaults drift later. **Captured: `pinned_assets_20260816.json`**
+  (`molmospaces-bench-v1@20260408`, `molmospaces-bench-v2@20260415`). Every eval run must have
+  `MLSPACES_PINNED_ASSETS_FILE` pointing at it and `MLSPACES_FORCE_INSTALL=False`;
+  `scripts/run_full_matrix.sh` exports both, and `scripts/check_provenance.py` re-hashes the
+  file against the sha256 each run recorded, so a silent edit fails the provenance check.

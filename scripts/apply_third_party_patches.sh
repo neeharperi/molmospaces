@@ -4,6 +4,7 @@
 #
 #   scripts/apply_third_party_patches.sh dreamzero    # 48GB-card single-GPU inference
 #   scripts/apply_third_party_patches.sh molmoact2    # Blackwell + live-checkpoint API fix
+#   scripts/apply_third_party_patches.sh tiptop       # raise the M2T2 async client timeout
 #   scripts/apply_third_party_patches.sh              # all submodules that have patches
 #
 # These patches must be re-applied after any fresh clone or submodule checkout -- the fixes

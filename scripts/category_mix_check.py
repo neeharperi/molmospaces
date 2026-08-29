@@ -39,22 +39,50 @@ MIN_LARGE_CATEGORY = 50  # only call out unsampled categories big enough to move
 
 
 def load_per_category(path: Path) -> dict[str, tuple[int, int]]:
-    """category -> (oracle_successes, total), skipping the OVERALL row and '#' preamble."""
+    """category -> (oracle_successes, total), skipping the OVERALL row and '#' preamble.
+
+    The leaderboard's per-(task, policy) CSVs are not all the same shape. Some carry both
+    `successes` and `oracle_successes`; others (e.g. mb_pick_msproc/pi05.csv) carry a single
+    `successes` column alongside `oracle_rate_pct`, where that column IS the oracle count.
+    Prefer the explicit name, fall back to `successes`, and verify the choice against
+    `oracle_rate_pct` rather than trusting the header -- silently reading an at-end count as an
+    oracle count would bias every reweighted comparison in one direction.
+    """
     lines = [ln for ln in path.read_text().splitlines(keepends=True) if not ln.startswith("#")]
     out = {}
     for row in csv.DictReader(io.StringIO("".join(lines))):
         category = row["category"]
         if category == "OVERALL":
             continue
-        out[category] = (int(row["oracle_successes"]), int(row["total"]))
+        total = int(row["total"])
+        if row.get("oracle_successes") not in (None, ""):
+            successes = int(row["oracle_successes"])
+        elif row.get("successes") not in (None, ""):
+            successes = int(row["successes"])
+        else:
+            raise SystemExit(f"{path}: row {category!r} has neither oracle_successes nor successes")
+        rate = row.get("oracle_rate_pct")
+        if rate not in (None, "") and total:
+            implied = 100.0 * successes / total
+            if abs(implied - float(rate)) > 0.6:  # rounding in the published file is ~0.01
+                raise SystemExit(
+                    f"{path}: category {category!r} has {successes}/{total} = {implied:.2f}% but "
+                    f"oracle_rate_pct = {rate}%. The count column is not the oracle count; "
+                    f"reweighting against it would be wrong."
+                )
+        out[category] = (successes, total)
     return out
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--policy", required=True)
     parser.add_argument("--task", required=True)
-    parser.add_argument("--leaderboard-csv", type=Path, required=True, help="Per-(task,policy) leaderboard CSV.")
+    parser.add_argument(
+        "--leaderboard-csv", type=Path, required=True, help="Per-(task,policy) leaderboard CSV."
+    )
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args()
 
@@ -85,14 +113,22 @@ def main() -> None:
         return "INSIDE our 95% CI" if lo <= x <= hi else "OUTSIDE our 95% CI"
 
     print(f"{args.policy} / {args.task}   (results: {cells[-1]})")
-    print(f"  ours                                      {100.0 * our_successes / our_total:6.2f}%  "
-          f"({our_successes}/{our_total})   Wilson95 [{lo:.2f}%, {hi:.2f}%]")
-    print(f"  leaderboard, all {len(leaderboard):2d} categories       {lb_pct:6.2f}%  "
-          f"({lb_successes}/{lb_total})   -> {verdict(lb_pct)}")
-    print(f"  leaderboard reweighted to OUR mix         {reweighted_pct:6.2f}%"
-          f"{'':<20}-> {verdict(reweighted_pct)}")
+    print(
+        f"  ours                                      {100.0 * our_successes / our_total:6.2f}%  "
+        f"({our_successes}/{our_total})   Wilson95 [{lo:.2f}%, {hi:.2f}%]"
+    )
+    print(
+        f"  leaderboard, all {len(leaderboard):2d} categories       {lb_pct:6.2f}%  "
+        f"({lb_successes}/{lb_total})   -> {verdict(lb_pct)}"
+    )
+    print(
+        f"  leaderboard reweighted to OUR mix         {reweighted_pct:6.2f}%"
+        f"{'':<20}-> {verdict(reweighted_pct)}"
+    )
 
-    print(f"\n  categories: we sampled {len(ours)} of {len(leaderboard)} present on the leaderboard")
+    print(
+        f"\n  categories: we sampled {len(ours)} of {len(leaderboard)} present on the leaderboard"
+    )
     unsampled = sorted(
         (c for c in leaderboard if c not in ours and leaderboard[c][1] >= MIN_LARGE_CATEGORY),
         key=lambda c: -leaderboard[c][1],

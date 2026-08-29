@@ -27,6 +27,17 @@ logging.basicConfig(level=logging.INFO)
 PING_INTERVAL_SECS = 60
 PING_TIMEOUT_SECS = 600
 
+# Bound the reconnect loop. The upstream wrapper retried forever, which turned a dead server
+# into a silent hang rather than a failed cell: during the Open-v1 run on 2026-08-18 the TiPToP
+# server exited (most likely OOM-killed -- its RSS had grown ~16GB -> ~23GB over the run) and
+# the client spent about 8 hours logging "Retrying in 2s..." while producing no episodes and no
+# provenance. Failing the cell after a bounded wait means the matrix runner moves on and the
+# loss is one task, not a night. The budget below is deliberately generous -- a TiPToP server
+# restart with cuRobo/cuTAMP warmup legitimately takes minutes -- but finite.
+RECONNECT_MAX_ATTEMPTS = 15
+RECONNECT_INITIAL_DELAY_SECS = 2
+RECONNECT_MAX_DELAY_SECS = 30
+
 
 class TiptopWebsocketClient:
     """Websocket client that adds endpoint field for a TiPToP server."""
@@ -62,18 +73,32 @@ class TiptopWebsocketClient:
         return conn, metadata
 
     def _reconnect(self) -> None:
-        retry_delay = 2
-        while True:
+        """Reconnect with bounded exponential backoff, raising if the server stays down.
+
+        Raises RuntimeError rather than looping forever -- see RECONNECT_MAX_ATTEMPTS.
+        """
+        retry_delay = RECONNECT_INITIAL_DELAY_SECS
+        last_error: Exception | None = None
+        for attempt in range(1, RECONNECT_MAX_ATTEMPTS + 1):
             logging.warning(
-                f"WebSocket connection closed. Reconnecting to {self._connected_uri}..."
+                f"WebSocket connection closed. Reconnecting to {self._connected_uri} "
+                f"(attempt {attempt}/{RECONNECT_MAX_ATTEMPTS})..."
             )
             try:
                 self._ws, self._server_metadata = self._connect_once(self._connected_uri)
                 logging.info("Reconnected to server.")
                 return
             except Exception as e:
+                last_error = e
                 logging.warning(f"Reconnect failed: {e}. Retrying in {retry_delay}s...")
                 time.sleep(retry_delay)
+                retry_delay = min(retry_delay * 2, RECONNECT_MAX_DELAY_SECS)
+        raise RuntimeError(
+            f"TiPToP server at {self._connected_uri} did not come back after "
+            f"{RECONNECT_MAX_ATTEMPTS} attempts; last error: {last_error!r}. "
+            f"Failing this cell rather than retrying indefinitely -- check the server log "
+            f"(it is not restarted automatically) and re-run; scripts/eval.py is resumable."
+        )
 
     def infer(self, obs: dict) -> dict:
         obs["endpoint"] = "infer"

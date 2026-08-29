@@ -14,8 +14,16 @@ MODEL="${MODEL:-$PWD/third_party/dreamzero/checkpoints/DreamZero-DROID}"
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 # deepspeed is unused at inference but transformers imports it, and it hard-errors unless nvcc
-# exists for its compatibility probe. polaris-dreamzero itself has no CUDA toolkit installed.
-export CUDA_HOME="${CUDA_HOME:-$HOME/anaconda3/envs/polaris}"
+# exists for its compatibility probe. mlspaces-dreamzero itself has no CUDA toolkit installed,
+# so this borrows nvcc from mlspaces-tiptop, which does (it needs one to build cuRobo/cuTAMP).
+# Any env with a toolchain works; nothing here actually runs deepspeed.
+_envs="${MLSPACES_ENVS:-$HOME/anaconda3/envs}"
+if [ -z "${CUDA_HOME:-}" ]; then
+    for _e in mlspaces-tiptop mlspaces-m2t2; do
+        [ -x "$_envs/$_e/bin/nvcc" ] && { CUDA_HOME="$_envs/$_e"; break; }
+    done
+fi
+export CUDA_HOME
 # The reduce-overhead compiles of the image encoder and VAE hold ~5 GB in CUDA-graph private
 # pools; disabled here to keep the memory instead of the ~compile speedup.
 export TORCHDYNAMO_DISABLE="${TORCHDYNAMO_DISABLE:-1}"
@@ -25,7 +33,7 @@ export DREAMZERO_DIT_SPLIT="$DIT_SPLIT"
 export DREAMZERO_DISABLE_DREAM_VIDEO="${DREAMZERO_DISABLE_DREAM_VIDEO:-1}"
 
 CUDA_VISIBLE_DEVICES="$GPUS" \
-  "${DREAMZERO_PYTHON:-$HOME/anaconda3/envs/polaris-dreamzero/bin/python}" -m torch.distributed.run \
+  "${DREAMZERO_PYTHON:-${MLSPACES_ENVS:-$HOME/anaconda3/envs}/mlspaces-dreamzero/bin/python}" -m torch.distributed.run \
   --standalone --nproc_per_node=1 \
   third_party/dreamzero/socket_test_optimized_AR.py \
   --port "$PORT" --enable-dit-cache --model-path "$MODEL"

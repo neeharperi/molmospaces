@@ -333,7 +333,39 @@ handled by `_EXPECTED_DATA_VERSIONS`' multi-version admission).
 | Open-v1 | 16 | 37.5% | (Bayesian CI, small n) |
 | Close-v1 | -- | blocked | grasp-data gap, see above |
 
-## Reproduction check: PASS (2026-08-17)
+## Reproduction check: RETRACTED (recorded 2026-08-17, invalidated 2026-08-19)
+
+> **Read this heading before the table below it.** This section originally declared
+> "PASS ... 9/9 cells ... PR2 is now fully complete" for pi05_droid. That conclusion does not
+> survive two later findings in this same document (see "`--max_episodes` silently
+> under-covers object categories" and "`--max_episodes` OVERSAMPLES"), and the retraction was
+> appended at the bottom of the file rather than folded back in here -- so for two days the
+> document's headline verdict contradicted its own evidence. Corrected now.
+>
+> What actually held, cell by cell:
+>
+> | cell | reported then | status now |
+> |---|---|---|
+> | Open-v1 | 37.5% (n=16), PASS | **invalid** -- ran before the `grasp_libraries=["droid"]` fix; 8 of 16 work items skipped, leaving a single category (`Refrigerator`). Retired to `runs/pi05_droid_STALE_pre_graspfix_20260819/`. |
+> | Close-v1 | 66.1% (n=6000), PASS | **untrustworthy** -- `--max_episodes 500` drew 6000 clustered resamples from 27 houses against a benchmark that contains 915 episodes. The Wilson interval assumes independent trials and is far too narrow; the reweighted value already fell outside. |
+> | the 7 Group B cells | PASS at n=47-50 | **superseded on methodology** -- all used `--max_episodes 50`, which is now barred for any number compared to the leaderboard. Moved to `runs/_superseded_max_episodes/`. |
+> | MolmoBot Combined | 10.4% (n=346), PASS | superseded with its constituents. |
+>
+> So the defensible statement is: **eight cells agreed with the leaderboard at small n, one was
+> invalid, and none of them was produced with an evaluation set comparable to the leaderboard's.**
+> That is real evidence the integration is correct -- eight independent near-misses in the right
+> direction is not luck -- but it is not the acceptance bar, and it was wrong to record it as one.
+> The bar is a full-coverage run with no `--max_episodes`, which is what the current campaign is
+> producing.
+>
+> The lesson is procedural rather than technical: a verdict section that a later finding
+> invalidates has to be edited, not annotated further down. A reader who stops at the first
+> "PASS" heading gets the wrong answer, and this document is the artifact BENCHMARK.md's
+> acceptance criteria point at.
+
+The original text follows, unedited, for the record.
+
+### Original entry (superseded)
 
 `reference/leaderboard_snapshot.csv` is now captured (see `reference/README.md` for exact
 method and task-slug mapping) and `scripts/compare_to_leaderboard.py` gives real verdicts:
@@ -353,7 +385,8 @@ Close-v1            pi05_droid        66.1% (6000)    65.14%      PASS
 MolmoBot Combined   pi05_droid        10.4% (346)     10.25%      PASS
 ```
 
-**All 9/9 cells PASS, and the load-bearing Group B pooled check ("MolmoBot Combined")
+**[SUPERSEDED -- see the retraction at the top of this section.]
+All 9/9 cells PASS, and the load-bearing Group B pooled check ("MolmoBot Combined")
 PASSES** -- our 346-episode pooled aggregate (10.4%) lands right next to the leaderboard's
 own 5597-episode pooled aggregate (10.25%). **π0.5-DROID reproduction is complete and
 successful across the entire 9-task matrix.** This is the strongest possible evidence that
@@ -373,7 +406,7 @@ way, also found and fixed a real gap in `scripts/check_provenance.py`: its
 null for server-managed policies like TiPToP, which has no client-side checkpoint at all)
 was declared but never actually wired into the validation loop.
 
-**PR2 (π0.5-DROID reference path) is now fully complete.**
+**[SUPERSEDED]** ~~PR2 (π0.5-DROID reference path) is now fully complete.~~ The integration is complete; the *reproduction* is not, pending full-coverage cells.
 
 ### MolmoAct2-DROID
 
@@ -893,6 +926,258 @@ only for smoke tests and handshakes, never for a number that will be compared to
 leaderboard. (`scripts/eval.py` still records the flag in provenance, so any cell that used
 it is identifiable after the fact.)
 
+## First full-coverage cell: pi05 Pick-v1.5 MISSES the leaderboard, upward (2026-08-19)
+
+The first cell of the Group B campaign is complete and it does not reproduce. Recorded here
+immediately because pi05 is the reference path the rest of the campaign is staked on.
+
+```
+task                policy            ours (n)        leaderboard   verdict
+Pick-v1.5           pi05_droid        23.7% (1000)    18.05%        FAIL
+```
+
+Run quality is not the problem. `n_episodes=1000` with `max_episodes=None` (the full benchmark,
+against the leaderboard's own n=997), seed 42, provenance verified, `oracle` and `at-end`
+identical at 237/1000. Wilson 95% [21.17%, 26.43%] excludes 18.05% by ~3pp.
+
+**Category mix does not explain it.** `scripts/category_mix_check.py` reweighting the
+leaderboard's per-category rates by our episode counts gives **18.04%** against its raw 18.05%
+-- we sampled 18 of 18 categories, so there is essentially nothing to reweight. This is the
+opposite of the Open-v1 situation, where reweighting closed the gap entirely.
+
+**Note the direction.** We are 5.6pp *better* than the published number. Integration bugs
+almost always cost score -- wrong control rate, wrong camera, wrong action space, a missing
+`reset()` -- so "too good" points away from the wiring and toward the comparison itself.
+
+**What the leaderboard's own files say about how those numbers were made.** Each published CSV
+carries a `# run_path` header, and for pi05 they are informative:
+
+| task | run_path | date |
+|---|---|---|
+| mb_pick_msproc | `/weka/prior/abhayd/sim_cotraining_output/eval_runs_openpi/20260324_182515_pick_msproc_pi05/.../PiPnPBenchmarkEvalConfig/...` | 2026-03-24 |
+| mb_pick_classic | `.../sim_cotraining_output/eval_runs_openpi/20260324_182520_pick_classic_pi05/.../PiPnPBenchmarkEvalConfig/...` | 2026-03-24 |
+| mb_pnp | `.../sim_cotraining_output/eval_runs_openpi/20260324_182534_pnp_pi05/.../PiPnPBenchmarkEvalConfig/...` | 2026-03-24 |
+| ms_close | `/home/orayyan/projects/molmospaces/eval_output/new_results/close/pi05` | (different author, `# dt: 0.1`) |
+
+Three things fall out, none of which was visible before running a full-coverage cell:
+
+1. **The Group B entries come from `sim_cotraining_output`** and were produced with
+   `PiPnPBenchmarkEvalConfig`, not the `PiPolicyEvalConfig` this repo uses. That directory name
+   says the checkpoint behind those numbers came out of a sim co-training experiment. If it is
+   not plain `pi05_droid_jointpos`, we are not evaluating the same model, and no amount of
+   harness correctness will close the gap.
+2. **The leaderboard is not one homogeneous run.** Group A and Group B were produced by
+   different people, from different machines, with different pipelines and different `# dt`
+   headers. Treating "the leaderboard" as a single reference is already an approximation.
+3. **They date from 2026-03-24**, against benchmark JSONs of Dec 2025 - Mar 2026, while this
+   repo is at HEAD (`v0.2.0` shipped 2026-06-12). BENCHMARK.md's own risk list anticipated
+   exactly this: "Leaderboard entries predate the current molmospaces version... Numbers may not
+   be reproducible at HEAD at all."
+
+**Not treating this as decisive yet, deliberately.** BENCHMARK.md's guidance is that a single
+FAIL is noise and a *pattern* across tasks is the signal -- and the load-bearing check is the
+7-task pooled Group B aggregate, not any one cell. The campaign continues. What to watch: if
+the remaining six Group B cells also come in high, that is a systematic offset between this
+harness/checkpoint and the published run, not a per-task fluke, and the next step is to pin
+down which checkpoint `sim_cotraining_output` refers to before re-running anything.
+
+Worth noting what this retires: the superseded `--max_episodes 50` run of this same cell scored
+**16.0%** and "PASSed" only because n=50 gives a ~±10pp interval. The full-coverage number is
+23.7%. The small-n run was not merely imprecise, it pointed the wrong way.
+
+**Tooling fix found here**: `category_mix_check.py` assumed every leaderboard CSV has an
+`oracle_successes` column. `mb_pick_msproc/pi05.csv` instead has a single `successes` column
+alongside `oracle_rate_pct` (where that column *is* the oracle count). It now accepts either and
+cross-checks the count against `oracle_rate_pct`, failing loudly rather than silently reading an
+at-end count as an oracle count -- which would have biased every reweighted comparison one way.
+
+## Classic vs filament on the same benchmark JSON: no rate difference, but massive per-episode churn (2026-08-20)
+
+BENCHMARK.md flags that Pick-v2-classic and Pick-v2-filament share one benchmark JSON
+(`FrankaPickHardBench_20260206`) and differ only by renderer, so "any difference beyond the
+renderer would be a bug". Our full-coverage runs gave 8.70% vs 10.70% (n=1000 each), a 2pp gap
+worth checking. Investigated on completed runs only -- no new GPU time.
+
+**Setup is genuinely identical.** Both provenance records show the same `benchmark_dir`, n=1000,
+`max_episodes=None`, seed 42, no `--camera_names`, same `PiPolicyEvalConfig`. The only
+differences are the conda env (i.e. the renderer) and `--num_workers` (4 classic / 1 filament).
+
+**The same 1000 episodes were evaluated in both.** `scripts/check_cross_repo_cell.py` reports
+0 only-in-classic and 0 only-in-filament. So there is no sampling, ordering or coverage bug --
+the thing most worth ruling out is ruled out.
+
+**The 2pp gap is not statistically significant.** Paired 2x2 over the 1000 shared episodes:
+
+|              | filament T | filament F |
+|---|---|---|
+| **classic T** | 24 | 63 |
+| **classic F** | 83 | 830 |
+
+McNemar on the 146 discordant pairs: chi2 = (83-63)^2/146 = 2.74, two-sided **p = 0.098**. The
+unpaired Wilson intervals overlap as well ([7.11, 10.61] vs [8.93, 12.77]). So there is no
+evidence the renderers differ in success *rate*, and the original concern -- a bug lurking
+behind the 2pp -- is not supported.
+
+**The real finding is the churn.** 146 of 1000 episodes (14.6%) flipped outcome -- a
+disagreement rate *larger than either run's success rate*. Only **24 of 87** classic successes
+are also filament successes (Jaccard 0.141). Under independence the expected overlap would be
+9.3, so the two runs are positively correlated but only weakly: the renderer change does not
+perturb a stable set of solved episodes, it substantially re-randomises which episodes get
+solved. Two consequences:
+
+1. **Aggregate agreement between renderers is much weaker evidence than it looks.** Two runs
+   can land 2pp apart while agreeing on only ~14% of their successes. Earlier in this project
+   the close agreement of the n=47/49 classic and filament cells (6.1% vs 6.4%) was read as
+   confirming "physics/assets/seeds are consistent across the two envs". That inference does not
+   survive this: matching rates at small n say almost nothing about per-episode consistency.
+2. **Per-episode reproducibility is not available on this path**, which is the same wall the
+   cross-repo behavioural check hit with Cosmos (see that section). It is now observed twice, on
+   two different policies and two different code paths.
+
+**Confound, stated rather than glossed: `--num_workers` differed (4 vs 1).** Filament is capped
+at 1 worker because 4 concurrent Vulkan contexts exhaust GPU handles on this host, so renderer
+and worker count are not separable in this pair. If per-episode randomness derives from state
+that worker scheduling touches, worker count alone could produce this churn and the renderer
+would be exonerated entirely.
+
+**Decisive experiment, cheap and not yet run**: re-run Pick-v2-classic with `--num_workers 1`
+and compare *paired per-episode* outcomes against the existing 4-worker classic run. A subset
+(~200 episodes) suffices -- this is a paired comparison, not a rate to be compared against the
+leaderboard, so partial coverage is legitimate here. If those 200 agree, worker count is
+irrelevant and the churn is the renderer (or GPU nondeterminism); if they disagree at a similar
+~15% rate, worker count or general nondeterminism explains it and the renderer is not implicated
+at all. ~1 h at classic throughput.
+
+**Aside on `category_mix_check.py`**: not usable on these tasks. Pick-v2 has **612** distinct
+"categories" over 1000 episodes (median size 1) because objaverse names a category per object
+instance. Reweighting is only meaningful on the bench-v1 tasks (Open-v1's 13-18 real semantic
+categories), and that is where it has in fact been useful.
+
+## Environment parity with `robot-prompt-opt` (2026-08-19)
+
+Added when BENCHMARK.md gained parity as a pass/fail acceptance criterion. Full register:
+`docs/env_parity.md`. Summary of what changed here and what it found.
+
+**Before**: three of the five policy servers (DreamZero, Cosmos, M2T2) ran *inside*
+`robot-prompt-opt`'s own conda envs by absolute path, and Cosmos additionally used that repo's
+`third_party/cosmos_policy` checkout in place. Convenient, and it is how those integrations got
+working quickly -- but it means a `pip install` in the sibling project silently changes this
+project's numbers, with no signal. openpi, MolmoAct2 and TiPToP meanwhile had envs specified
+independently here (uv/pixi inside `third_party/`), diverging from that repo's for no recorded
+reason. The two harness envs were built by bare `pip install`, which BENCHMARK.md's acceptance
+criteria bar outright.
+
+**After**: every policy env is now a `mlspaces-*` conda env in this repo, built by
+`scripts/setup_envs.sh` as a deliberate mirror of the peer's `polaris-*` env -- same Python,
+same torch/CUDA build, same pins, same source builds, same order.
+`scripts/check_env_parity.py` diffs the resolved distribution sets and fails on anything not
+written down in `docs/env_parity.md`. Separate envs rather than shared ones, so either project
+can be upgraded without silently moving the other's results mid-campaign.
+
+**The peer's authoritative artifact is not a lockfile.** Its `uv.lock`, `pixi.lock` and
+Dockerfiles are inert -- nothing consumes them, there is no `.venv/` at its root. Environments
+there are built by a 595-line `scripts/setup_envs.sh` that hand-translates upstream uv/pixi
+configs to conda+pip. So BENCHMARK.md's preferred tier 1 ("shared lock artifacts") has nothing
+to point at; this lands on tier 2, copied recipe plus a drift check.
+
+**Findings from actually running the check:**
+
+1. **Floating clones are not a hypothetical risk.** The peer pins only 2 of its 7 third-party
+   checkouts (openpi as a submodule, cuTAMP by tag) and floats the rest on branch HEAD via
+   `git pull --ff-only`. `NVIDIA/cosmos-framework`'s `main` has *already* moved to `84bd8828`
+   from the `c14617c2` its env was built against. `scripts/setup_envs.sh` here pins every
+   checkout to an explicit SHA, all recorded in `docs/env_parity.md`.
+2. **A copied recipe does not pin transitive dependencies, and that is its structural
+   weakness.** Two correct builds of the same recipe a day apart differed on
+   `charset-normalizer`, `idna`, `uvicorn`, `pygments`, `python-dotenv` and (for DreamZero) 20
+   packages including `numba`, `wandb` and `nvidia-modelopt` -- purely because they resolve to
+   whatever is newest on PyPI on build day. This is exactly what a lockfile would prevent and a
+   recipe cannot. Rather than let the parity check sit red forever (BENCHMARK.md's own warning:
+   "parity now depends on someone reading a red check"), `check_env_parity.py --sync-to-peer`
+   installs the peer's exact version for any version-only difference. It deliberately refuses
+   to touch packages present on one side only -- those are structural and need a human.
+3. **MolmoAct2's torch build converged, and its earlier results do not carry over.** This repo
+   was on `2.7.1+cu128`, the peer on `2.8.0+cu129`; both were workarounds for upstream's
+   `2.5.1+cu121`, which has no `sm_120` kernels. Now both are `2.8.0+cu129`. **Consequence:
+   MolmoAct2 must be re-handshaked and re-spot-checked before its matrix cells are trusted** --
+   its prior validation was on a different torch.
+4. **`git-lfs` is not installed on this host**, and the peer gets it from its `polaris` env's
+   bin -- an env this repo has no counterpart to. Without it the M2T2 weights clone silently
+   leaves 133-byte pointer files, which surface much later as an opaque `invalid load key, 'v'`
+   from `torch.load` inside the server. `setup_envs.sh` now installs `git-lfs` into
+   `mlspaces-m2t2` and uses it explicitly. Caught by the env's own `--check`, which is the
+   argument for porting those assertion blocks rather than just the install steps.
+5. **Two accepted divergences, both recorded with reasons** (`docs/env_parity.md`): the peer's
+   vestigial empty editable `m2t2` install (whose `__file__` is `None`; the real import is via
+   `m2t2_repo.pth` in both envs), and five `huggingface_hub[cli]` extra dependencies the peer
+   missed through pip resolution order. Neither is on an inference path.
+6. **openpi stays divergent, by design.** Not a version pin: the peer serves
+   `pi05_droid_jointpos_polaris` from upstream `Physical-Intelligence/openpi`, this repo serves
+   `pi05_droid_jointpos` from the `omarrayyann` fork, and the latter is what the MolmoSpaces
+   leaderboard entry was produced with. Adopting the peer's would make the reproduction fail by
+   construction, which defeats the purpose parity serves. BENCHMARK.md's "parity wins" default
+   is aimed at pins and does not sensibly extend to swapping the model under test.
+
+7. **A recipe can stop working on a newer pip, and fail silently-ish.** The Cosmos env's
+   ~76-package bulk install -- copied verbatim from the peer, where it works -- aborted here
+   with `resolution-too-deep` ("the dependency graph is too complex for pip to solve
+   efficiently") and installed *nothing*: 71 of 76 packages missing, while `import
+   cosmos_framework` still succeeded, so a shallower check would have called the env good. Only
+   importing `cosmos_framework.scripts.action_policy_server_robolab` (which is what the DROID
+   server actually needs, and what `--check` asserts) catches it. Fixed by splitting the install
+   into ten role-grouped chunks: same final package set, ten tractable solves instead of one
+   intractable joint one. This is the sharpest illustration of tier-2's limits -- a lockfile
+   would have been immune, because it never asks the resolver anything.
+
+### Cross-repo behavioural check: run, and it says the criterion as written is unsatisfiable
+
+BENCHMARK.md:96-98 asks for one cell run in both repos' environments to produce *identical*
+per-episode outcomes at identical seeds, on the correct grounds that matching package lists
+don't prove matching behaviour. Run with Cosmos-Edge on Pick-v1.5, 3 episodes, seed 42
+(`scripts/check_cross_repo_cell.py`, runs under `runs/_xrepo/`):
+
+| run | server env | server process | outcome on `ladle_7a72...` |
+|---|---|---|---|
+| mlspaces run 1 | `mlspaces-cosmos-policy` | fresh | **True** |
+| mlspaces run 2 | `mlspaces-cosmos-policy` | fresh (restart) | False |
+| polaris run 1 | `polaris-cosmos-policy` | fresh | False |
+| polaris run 2 | `polaris-cosmos-policy` | same process as run 1 | False |
+
+The other two episodes agreed everywhere. Cross-environment, one of three flipped -- which
+looks like a parity failure until the control is run. **The same environment, restarted, flips
+the same episode the same way.** So the cross-environment difference is not environmental; it
+is within-environment run-to-run noise on one borderline episode.
+
+**And it is not seed variation.** The server logs `deterministic_seed=False`, so
+`_next_seed()` draws from `self._rng` per call -- but `self._rng =
+np.random.default_rng(self.cfg.seed)` with `seed=0`, so every *fresh* server replays the
+identical seed sequence. All three fresh servers logged `seed=0`. The two mlspaces runs
+therefore saw byte-identical seeds and still disagreed. What is left is GPU-level
+nondeterminism: bf16 reductions, attention kernels and cuDNN autotuning are not bitwise
+reproducible across processes. Passing `--deterministic-seed` would not fix this, and testing
+it would have been wasted time -- the seeds were already identical.
+
+**Conclusion.** The two environments are indistinguishable at this resolution, which is the
+substantive thing the criterion was after. But "identical per-episode outcomes" is not a
+property a stochastic diffusion policy on GPU has, even against itself, so it cannot be used as
+a pass/fail gate. The honest replacement, and what this project should assert going forward:
+*the cross-environment disagreement rate must not exceed the within-environment disagreement
+rate*, established by running the in-env control alongside every cross-env comparison. At n=3
+that is satisfied (1 of 3 either way). Making it a strong claim needs more episodes, not a
+different seed -- worth doing on a policy with a cheaper forward pass, or with enough episodes
+that the two rates are separable.
+
+`scripts/check_cross_repo_cell.py` compares any two run directories, so the control is the same
+command with two same-env run dirs; its docstring now requires running it before reading any
+cross-environment difference as environmental.
+
+**Non-environment couplings that remain, deliberately.** Checkpoints are shared, not copied:
+the machine's HF cache serves both projects, and `third_party/dreamzero/checkpoints/DreamZero-DROID`
+is a symlink into `robot-prompt-opt/checkpoints/`. Weights are not part of an environment and a
+second 20-45 GB copy each buys nothing. One caveat worth knowing: that checkpoint's bundled
+`config.json` hardcodes *absolute* paths to three Wan2.1-I2V-14B-480P components under the
+sibling repo, so deleting that directory breaks DreamZero here.
+
 ## Provenance schema
 
 `scripts/eval.py` writes one `provenance.json` per `runs/<policy>/<task>/<date>/` cell (see
@@ -906,14 +1191,32 @@ timestamp.
 ## Open questions (tracked, not silently resolved)
 
 1. Exact openpi fork SHA the leaderboard numbers were produced against (vs. "current main").
+   **Sharpened 2026-08-19**: the published Group B CSVs' `# run_path` headers point at
+   `sim_cotraining_output/eval_runs_openpi/...` and `PiPnPBenchmarkEvalConfig`, dated
+   2026-03-24. So the open question is not only the fork SHA but *which checkpoint* -- a
+   sim-co-trained one may not be `pi05_droid_jointpos` at all. This is now the leading
+   candidate explanation for the Pick-v1.5 miss above.
 2. Leaderboard `--success-condition`: `oracle` is well-supported but not confirmed against
    the live leaderboard site/JSON (a client-rendered app, not fetchable directly).
-3. `reference/leaderboard_snapshot.csv` capture -- needs a human with a browser, or a
-   browser-automation pass; blocks PR2's acceptance criteria until done.
+3. ~~`reference/leaderboard_snapshot.csv` capture~~ **RESOLVED.** All six policy
+   configurations are captured (see `reference/README.md` for slugs and method). Final gap
+   closed 2026-08-19: **DreamZero has Group A entries only** -- `ms_open` (246/990 = 24.85%)
+   and `ms_close` (552/915 = 60.33%) return real CSVs, all 7 Group B slugs return the SPA's
+   HTML shell. That is the mirror image of TiPToP, which has Group B only. Between them, every
+   one of the 9 tasks has at least one policy with no reference number, and neither gap is a
+   fetch bug.
 4. TiPToP depth source (MuJoCo ground truth vs. its own stereo estimator) -- defaulting to
    ground truth for determinism; flagged as a known, direction-predictable deviation.
 5. MolmoAct2 bench-v2 exterior camera choice (`randomized_zed2_analogue_1` vs.
    `randomized_gopro_analogue_1`) -- defaulting to match `PI_Policy`'s existing choice.
+6. Cosmos control rate: defaulted `policy_dt_ms=66.0` (~15Hz) from the server's own startup log
+   (`fps=15.0`). The leaderboard CSVs' `# dt: 0.1` header carries no information about the rate
+   actually used and must not be read as one -- `eval_to_csv.py` echoes whatever `--dt` was
+   passed, never deriving it from `policy_dt_ms`. Revisit only if Cosmos results diverge sharply.
+7. Cross-repo behavioural parity check (BENCHMARK.md:96-98) -- not yet run; see the environment
+   parity section above for the intended vehicle.
+8. Whether MolmoAct2's numbers move on the converged `2.8.0+cu129` torch build. Its previous
+   validation was on `2.7.1+cu128`; re-handshake and re-spot-check before trusting its cells.
 
 **Resolved during PR1/PR2 environment setup (2026-08-16):**
 - DreamZero bench-v2 camera availability: confirmed via real `benchmark.json` data.

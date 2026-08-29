@@ -1,0 +1,12 @@
+# Mirrored from robot-prompt-opt/scripts/constraints/openpi.txt. Not currently applied by
+# scripts/setup_envs.sh -- this repo's openpi env is the one INTENTIONAL divergence from
+# robot-prompt-opt (different fork, different checkpoint; see docs/env_parity.md) and is built
+# by `uv sync` inside third_party/openpi rather than by conda+pip. Kept so that the constraint
+# set is available if that ever changes, and so the two repos' constraints/ directories can be
+# diffed as-is.
+setuptools<81
+# openpi imports chex but does not declare it. Installing chex unconstrained lets pip "solve"
+# its requirements by pulling jax 0.10.x and numpy 2.x, which breaks orbax and the whole env.
+jax==0.5.3
+jaxlib==0.5.3
+numpy<2.0.0

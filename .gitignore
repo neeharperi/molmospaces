@@ -61,3 +61,11 @@ __pycache__/
 
 # Per-request perception/planning dumps written by the TiPToP server next to its cwd.
 tiptop_server_outputs/
+
+# third_party/m2t2 is a plain pinned clone, not a submodule, deliberately: it lives in a
+# PRIVATE fork (williamshen-nz/m2t2-private) and is needed only by TiPToP. As a submodule,
+# `git submodule update --init` would hard-fail for every clone of this repo, including for
+# people who never run TiPToP. As a gitignored clone it is created on demand by
+# `scripts/setup_envs.sh mlspaces-m2t2`, which pins the SHA recorded in docs/env_parity.md.
+# Its git-lfs weights land under weights/ and are large.
+third_party/m2t2/
