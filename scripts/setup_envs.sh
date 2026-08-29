@@ -208,6 +208,15 @@ _harness_common() {  # $1 = env name
     # websockets, dm-tree) are already satisfied by the base install, so --no-deps is safe.
     "$PIP" install --no-deps -e third_party/openpi/packages/openpi-client
     "$PIP" install -U "numpy>=2,<3"
+    # json-numpy is needed on the HARNESS side too, not just in mlspaces-molmoact2. MolmoAct2
+    # is the one policy that speaks HTTP rather than the msgpack websocket, and
+    # molmoact2_policy.py's MolmoAct2HTTPClient imports json_numpy to encode the request. It
+    # was missing from this function, and the failure is quiet in the worst way: the client's
+    # connect retries swallow the ImportError as a connection failure ("Connection attempt 1
+    # failed: No module named 'json_numpy'"), the episode is skipped, and the cell reports
+    # "Success count: 0, Total count: 0" -- a full matrix would have looked like MolmoAct2
+    # scoring zero everywhere rather than like a missing dependency.
+    "$PIP" install json-numpy
 }
 
 setup_classic() {
@@ -526,6 +535,8 @@ if int(numpy.__version__.split(".")[0]) < 2:
     ok = False
 import openpi_client  # noqa: F401
 print("  openpi_client OK (harness-side msgpack websocket client)")
+import json_numpy  # noqa: F401  MolmoAct2's client speaks HTTP+json_numpy, not websocket
+print("  json_numpy OK (harness-side MolmoAct2 HTTP client)")
 sys.exit(0 if ok else 1)
 EOF
         ;;
