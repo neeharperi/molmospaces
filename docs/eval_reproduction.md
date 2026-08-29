@@ -1388,3 +1388,39 @@ PRO 5000s. On these H100s, **8 concurrent filament contexts were verified workin
 succeeded, no errors, no `HandleAllocator arena is full` warning. Since the five filament tasks
 are roughly 85% of the campaign's wall-clock, raising that cap is the single biggest scheduling
 lever available, and it should be re-tested against a real eval cell rather than inherited.
+
+## Campaign 2 validation results
+
+### Positive control: PASS, and it reproduces the reference exactly
+
+`FrankaPickDroidMiniBench` (the scripted `PickPlannerPolicy`) on 5 episodes of Pick-v1.5:
+**Success count: 5, Total count: 5, Success rate 100.00%**, `Completed 4 work items, skipped 0`.
+Identical to the reference's post-fix number.
+
+That single number clears more than it looks like. A missing `add_auxiliary_objects`
+delegation in `json_eval_task_sampler.py` scores this 0.00%, so the fix ported correctly; the
+`Total episodes: 1000` line printing at all confirms the `logging.basicConfig` fix ported too
+(without it every `log.info` before the lazy policy import is swallowed by the root logger's
+WARNING default). And simulator, renderer, assets and the success judge are all confirmed
+before any policy can be blamed for a low score.
+
+### DreamZero's checkpoint no longer carries the paths the reference documented
+
+The reference recorded that `GEAR-Dreams/DreamZero-DROID`'s `config.json` hardcoded absolute
+paths to three Wan2.1-I2V-14B-480P components under a `~/Workspace/robot-prompt-opt` tree, and
+`scripts/fix_dreamzero_checkpoint.py` was written to repoint them. On the revision fetched here
+(`96ad3441`) **those paths are gone** -- the image encoder, text encoder and VAE are now
+`_target_` class references (`groot.vla.model.dreamzero.modules.*`), not file paths. The script
+correctly reports "no dangling absolute paths" and only does its symlink half. Kept, because it
+is idempotent and a future revision could regress.
+
+Two absolute paths *do* remain, and both are inert at inference:
+
+| key | value | why it does not matter |
+|---|---|---|
+| `action_head_cfg.config.load_pretrained_det_decode_layer_path` | `/mnt/aws-lfs-02/shared/ckpts/eagle_...decode_layer.pt` | Declared as a dataclass field in `wan_flow_matching_action_tf.py:136` and dereferenced nowhere else -- a training-init hook. The trained weights are already in the checkpoint's own safetensors. |
+| `resume_path` | `/mnt/aws-lfs-02/shared/seonghyeony/checkpoints/...` | Only read by `groot/vla/experiment/base.py`, the training entry point. |
+
+Both are NVIDIA-internal build paths, not the ones the reference saw, so this is a different
+checkpoint revision rather than a different machine. Verify at server start rather than
+assuming: a load-time failure here would name one of these paths.
