@@ -31,6 +31,33 @@ if [ -z "${COSMOS_EXTRA_ARGS+set}" ]; then
     fi
 fi
 
+# CUDA FORWARD COMPATIBILITY, and this env is the only one that needs it.
+#
+# cosmos-framework pins torch 2.13.0+cu130, i.e. CUDA 13.0, which requires an r580 driver.
+# This host runs 570.207 (CUDA 12.8), so torch loads fine and then reports
+# `torch.cuda.is_available() == False`, and the server dies with the far-downstream message
+# "RuntimeError: CUDA is required for OmniMoTModel inference in this repo."
+#
+# NVIDIA's supported answer for exactly this case -- newer CUDA runtime, older driver, on a
+# datacenter GPU -- is the cuda-compat package, which ships a forward-compatible libcuda.so
+# that talks to the older kernel module. H100 is a supported (Hopper) part. Unpacked without
+# root by scripts/install_nvidia_gl.sh.
+#
+# Scoped to THIS server rather than exported globally on purpose: every other env here runs
+# cu128/cu129 torch against the stock driver and works, and putting a forward-compat libcuda
+# ahead of them on the library path is a change none of them need.
+#
+# The alternative -- downgrading this env to a cu128 torch -- would break the pinned
+# natten==0.21.6+cu130.torch213 wheel and would silently change the environment the
+# leaderboard comparison is supposed to license.
+_COMPAT="${CUDA_COMPAT_DIR:-$HOME/cuda-compat-13/usr/local/cuda-13.0/compat}"
+if [ -d "$_COMPAT" ]; then
+    export LD_LIBRARY_PATH="$_COMPAT${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+else
+    echo "warning: no CUDA 13 compat libs at $_COMPAT; torch will not see the GPUs." >&2
+    echo "         run scripts/install_nvidia_gl.sh (no root required)" >&2
+fi
+
 # shellcheck disable=SC2086
 CUDA_VISIBLE_DEVICES="$GPU" HF_TOKEN="${HF_TOKEN:-}" \
   "${COSMOS_PYTHON:-${MLSPACES_ENVS:-$HOME/anaconda3/envs}/mlspaces-cosmos-policy/bin/python}" \

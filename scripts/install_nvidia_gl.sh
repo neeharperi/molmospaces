@@ -40,5 +40,24 @@ for f in usr/lib/x86_64-linux-gnu/libEGL_nvidia.so.0 \
          usr/share/vulkan/icd.d/nvidia_icd.json; do
     [ -e "$PREFIX/$f" ] || { echo "  ERROR: missing $f after extraction" >&2; exit 1; }
 done
+# ---- CUDA 13 forward-compat, for the cosmos env only -------------------------------------
+# cosmos-framework pins torch 2.13.0+cu130 (CUDA 13.0), which needs an r580 driver; this host
+# runs 570.x. NVIDIA's cuda-compat package is the supported answer on datacenter GPUs: a
+# forward-compatible libcuda.so that drives the older kernel module. Not in this host's apt
+# sources, so it comes from NVIDIA's public CUDA repo. Only scripts/serve_cosmos.sh puts it on
+# the library path -- every other env runs cu128/cu129 against the stock driver quite happily.
+COMPAT_PREFIX="${CUDA_COMPAT_PREFIX:-$HOME/cuda-compat-13}"
+CUDA_REPO="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64"
+echo "fetching cuda-compat-13-0"
+COMPAT_DEB="$(curl -s "$CUDA_REPO/Packages.gz" | zcat \
+    | awk '/^Package: cuda-compat-13-0$/{f=1} f&&/^Filename:/{print $2; f=0}' | tail -1)"
+[ -n "$COMPAT_DEB" ] || { echo "  ERROR: cuda-compat-13-0 not found in $CUDA_REPO" >&2; exit 1; }
+curl -sL -o cuda-compat.deb "$CUDA_REPO/$(basename "$COMPAT_DEB")"
+rm -rf "$COMPAT_PREFIX"; mkdir -p "$COMPAT_PREFIX"
+dpkg -x cuda-compat.deb "$COMPAT_PREFIX"
+[ -e "$COMPAT_PREFIX/usr/local/cuda-13.0/compat/libcuda.so.1" ] \
+    || { echo "  ERROR: no libcuda.so.1 after extracting cuda-compat" >&2; exit 1; }
+echo "  cuda-compat installed to $COMPAT_PREFIX"
+
 echo "installed to $PREFIX"
 echo "now: . scripts/nvidia_gl_env.sh"

@@ -545,6 +545,18 @@ EOF
 import json, os, sys, torch, transformers
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}  transformers {transformers.__version__}")
 ok = True
+# A check that passes on an env whose torch cannot see a GPU is worse than no check: the
+# mlspaces-cosmos-policy env did exactly that, printing avail=False and still reporting OK,
+# and the real failure surfaced much later as "CUDA is required for OmniMoTModel inference".
+# Driver/runtime mismatches (cu130 torch on an r570 driver) look fine at import and fail at
+# first allocation, so allocate.
+if not torch.cuda.is_available():
+    print("  FAIL: torch cannot see any GPU (driver/runtime mismatch?)"); ok = False
+else:
+    try:
+        torch.zeros(8, device="cuda")
+    except Exception as e:
+        print(f"  FAIL: CUDA allocation failed: {type(e).__name__}: {str(e)[:160]}"); ok = False
 if not transformers.__version__.startswith("4.57"):
     print("  FAIL: MolmoAct2's remote code wants transformers 4.57.x"); ok = False
 _sm = os.environ["EXPECTED_SM"]
@@ -581,6 +593,18 @@ EOF
 import os, sys, torch
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
 ok = True
+# A check that passes on an env whose torch cannot see a GPU is worse than no check: the
+# mlspaces-cosmos-policy env did exactly that, printing avail=False and still reporting OK,
+# and the real failure surfaced much later as "CUDA is required for OmniMoTModel inference".
+# Driver/runtime mismatches (cu130 torch on an r570 driver) look fine at import and fail at
+# first allocation, so allocate.
+if not torch.cuda.is_available():
+    print("  FAIL: torch cannot see any GPU (driver/runtime mismatch?)"); ok = False
+else:
+    try:
+        torch.zeros(8, device="cuda")
+    except Exception as e:
+        print(f"  FAIL: CUDA allocation failed: {type(e).__name__}: {str(e)[:160]}"); ok = False
 _sm = os.environ["EXPECTED_SM"]
 if _sm not in " ".join(torch.cuda.get_arch_list()):
     print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
@@ -606,6 +630,18 @@ import os, sys, torch
 from importlib.metadata import version, PackageNotFoundError
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
 ok = True
+# A check that passes on an env whose torch cannot see a GPU is worse than no check: the
+# mlspaces-cosmos-policy env did exactly that, printing avail=False and still reporting OK,
+# and the real failure surfaced much later as "CUDA is required for OmniMoTModel inference".
+# Driver/runtime mismatches (cu130 torch on an r570 driver) look fine at import and fail at
+# first allocation, so allocate.
+if not torch.cuda.is_available():
+    print("  FAIL: torch cannot see any GPU (driver/runtime mismatch?)"); ok = False
+else:
+    try:
+        torch.zeros(8, device="cuda")
+    except Exception as e:
+        print(f"  FAIL: CUDA allocation failed: {type(e).__name__}: {str(e)[:160]}"); ok = False
 _sm = os.environ["EXPECTED_SM"]
 if _sm not in " ".join(torch.cuda.get_arch_list()):
     print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
@@ -640,6 +676,15 @@ import inspect, os, sys, torch, flash_attn, transformers  # noqa: F401
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}  "
       f"flash_attn {flash_attn.__version__}  transformers {transformers.__version__}")
 ok = True
+# See the identical assertion in the other env checks: a driver/runtime mismatch imports
+# cleanly and only fails at first allocation, so allocate rather than trust is_available().
+if not torch.cuda.is_available():
+    print("  FAIL: torch cannot see any GPU (driver/runtime mismatch?)"); ok = False
+else:
+    try:
+        torch.zeros(8, device="cuda")
+    except Exception as e:
+        print(f"  FAIL: CUDA allocation failed: {type(e).__name__}: {str(e)[:160]}"); ok = False
 _sm = os.environ["EXPECTED_SM"]
 if _sm not in " ".join(torch.cuda.get_arch_list()):
     print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
@@ -653,10 +698,29 @@ sys.exit(0 if ok else 1)
 EOF
         ;;
       mlspaces-cosmos-policy)
+        # Checked WITH the CUDA 13 forward-compat libs on the path, because that is how
+        # scripts/serve_cosmos.sh actually runs it. This env's torch is cu130 and needs an
+        # r580 driver; this host has r570, so without these libs torch imports fine and then
+        # cannot see a GPU. Verifying a configuration the server does not use would be
+        # theatre in either direction -- a false FAIL here, or a false PASS if the assertion
+        # were dropped instead.
+        LD_LIBRARY_PATH="${CUDA_COMPAT_DIR:-$HOME/cuda-compat-13/usr/local/cuda-13.0/compat}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
         "$PY" - <<'EOF' || rc=1
 import os, sys, torch
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
 ok = True
+# A check that passes on an env whose torch cannot see a GPU is worse than no check: the
+# mlspaces-cosmos-policy env did exactly that, printing avail=False and still reporting OK,
+# and the real failure surfaced much later as "CUDA is required for OmniMoTModel inference".
+# Driver/runtime mismatches (cu130 torch on an r570 driver) look fine at import and fail at
+# first allocation, so allocate.
+if not torch.cuda.is_available():
+    print("  FAIL: torch cannot see any GPU (driver/runtime mismatch?)"); ok = False
+else:
+    try:
+        torch.zeros(8, device="cuda")
+    except Exception as e:
+        print(f"  FAIL: CUDA allocation failed: {type(e).__name__}: {str(e)[:160]}"); ok = False
 if "cu130" not in torch.__version__:
     print("  FAIL: torch is not the cu130 build"); ok = False
 _sm = os.environ["EXPECTED_SM"]
