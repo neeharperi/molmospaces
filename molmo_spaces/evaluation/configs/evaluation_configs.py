@@ -37,6 +37,7 @@ from molmo_spaces.configs.policy_configs_baselines import (
     CosmosPolicyConfig,
     DreamZeroPolicyConfig,
     MolmoAct2PolicyConfig,
+    Pi0PolicyConfig,
     PiPolicyConfig,
     TeleopPolicyConfig,
     TiptopPolicyConfig,
@@ -197,6 +198,22 @@ class PiPolicyEvalConfig(JsonBenchmarkEvalConfig):
     # policy_dt_ms: float = 200.0  # Match your model's expected control rate
     policy_dt_ms: float = 66.0  # ~15hz
     end_on_success: bool = True  # End episode immediately upon success, ignoring task_horizon
+
+    def model_post_init(self, __context):
+        super().model_post_init(__context)
+        self.robot_config.action_noise_config.enabled = False
+
+
+class Pi0PolicyEvalConfig(JsonBenchmarkEvalConfig):
+    """pi0-DROID. Same control rate and episode-termination semantics as pi0.5: both are
+    openpi DROID checkpoints in the same joint-position action space, served by the same
+    script from the same venv, so there is no reason for the harness side to differ.
+    """
+
+    robot_config: FrankaRobotConfig = FrankaRobotConfig()
+    policy_config: Pi0PolicyConfig = Pi0PolicyConfig()
+    policy_dt_ms: float = 66.0  # ~15hz
+    end_on_success: bool = True
 
     def model_post_init(self, __context):
         super().model_post_init(__context)

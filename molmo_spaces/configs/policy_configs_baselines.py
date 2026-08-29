@@ -29,6 +29,18 @@ class PiPolicyConfig(BasePolicyConfig):
             self.policy_factory = make_lenient(PI_Policy)
 
 
+class Pi0PolicyConfig(PiPolicyConfig):
+    """pi0-DROID. Identical wiring to pi0.5 -- same PI_Policy wrapper, same openpi
+    websocket protocol, same joint-position action space -- so only the checkpoint and the
+    port differ. A separate port (not 8080) because both servers run concurrently: the
+    campaign evaluates pi0 and pi0.5 in parallel lanes, and eval_main.py has no CLI override
+    for remote_config.port, so the distinction has to live in the config.
+    """
+
+    checkpoint_path: str = "third_party/openpi/checkpoints/pi0_droid_jointpos"
+    remote_config: dict | None = dict(host="localhost", port=8081)
+
+
 class MolmoAct2PolicyConfig(BasePolicyConfig):
     checkpoint_path: str = "allenai/MolmoAct2-DROID"
     remote_config: dict | None = dict(host="localhost", port=8000)

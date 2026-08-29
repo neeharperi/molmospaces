@@ -140,6 +140,12 @@ POLICIES: dict[str, PolicySpec] = {
         host="localhost",
         port=8080,
     ),
+    "pi0_droid": PolicySpec(
+        exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:Pi0PolicyEvalConfig",
+        checkpoint_path="third_party/openpi/checkpoints/pi0_droid_jointpos",
+        host="localhost",
+        port=8081,
+    ),
     "molmoact2_droid": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:MolmoAct2PolicyEvalConfig",
         checkpoint_path="allenai/MolmoAct2-DROID",
@@ -176,7 +182,7 @@ POLICIES: dict[str, PolicySpec] = {
 # cells = 3 * 9, plus the 3 Group B aggregates). DreamZero and Cosmos (added after
 # BENCHMARK.md was written) are evaluated and reported, but a miss is informational only.
 REPRODUCTION_POLICIES = ("pi05_droid", "molmoact2_droid", "tiptop")
-INFORMATIONAL_POLICIES = ("dreamzero", "cosmos_edge", "cosmos_nano")
+INFORMATIONAL_POLICIES = ("dreamzero", "cosmos_edge", "cosmos_nano", "pi0_droid")
 
 # The leaderboard's pooled-aggregate row name for the Group B (MolmoBot Combined) comparison.
 GROUP_B_LEADERBOARD_TASK_NAME = "MolmoBot Combined"

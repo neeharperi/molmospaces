@@ -47,6 +47,17 @@ Frozen, committed reference data for the DROID-leaderboard reproduction effort
   is a fact about the leaderboard, not a fetch failure, and it means DreamZero contributes
   nothing to the Group B campaign. Note this is the mirror image of TiPToP's gap: between the
   two of them, every one of the 9 tasks has at least one policy with no reference number.
+  **pi0, captured 2026-08-28: slug `pi0`, and it has GROUP A ONLY** -- the same shape as
+  DreamZero. `ms_open` (110/1000 = 11.00%) and `ms_close` (486/915 = 53.11%) return real CSVs
+  with the usual `oracle_successes`/`oracle_rate_pct` columns, so these are directly
+  comparable to every other row here; all 7 Group B slugs return the SPA's HTML shell. Added
+  when pi0-DROID was brought into the campaign alongside pi0.5. Note a sibling slug `pi0_fast`
+  also resolves, with the same Group-A-only coverage (`ms_open` 111/1001 = 11.09%, `ms_close`
+  353/915 = 38.58%); it is NOT captured here because pi0-FAST is a different checkpoint
+  (`pi0_fast_droid_jointpos`) and is not currently in `scripts/eval_common.py`'s POLICIES.
+  Both `pi0`'s run_paths are `/home/orayyan/projects/molmospaces/eval_output/new_results/
+  {open,close}/pi0` -- the same author and pipeline as the pi05 Group A rows, and a different
+  one from the pi05 Group B rows, which is the heterogeneity noted further down.
   Every policy's rows are now captured; nothing further is outstanding here.
 
   **`n_episodes` is not measured the same way for every policy block, and it matters for any

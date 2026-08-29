@@ -84,9 +84,17 @@ MOLMOACT2_REPO_ID="allenai/MolmoAct2-DROID"
 # not part of the environment, so this is not a parity difference.
 export HF_HUB_CACHE="${HF_HUB_CACHE:-$HOME/.cache/huggingface/hub}"
 
-# Blackwell. cuRobo, cuTAMP and M2T2's pointnet2_ops all build CUDA kernels from source and
-# none of them targets sm_120 by default.
-export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
+# GPU architecture. cuRobo, cuTAMP and M2T2's pointnet2_ops all build CUDA kernels from
+# source and none of them targets the local arch by default.
+#
+# THIS HOST IS HOPPER, NOT BLACKWELL. The campaign this script was written for ran on 2x RTX
+# PRO 5000 Blackwell (sm_120); this machine is 4x H100 NVL (sm_90). Everything else in the
+# recipe -- the cu129/cu130 wheel indices, the flash-attn build, the exact pins -- is
+# arch-agnostic and stays as it was, because the pins are what makes results comparable
+# across the two runs. Only the compile target and the corresponding assertions change.
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0}"
+# The arch string the check_env() assertions below require torch to have been built with.
+export EXPECTED_SM="${EXPECTED_SM:-sm_90}"
 
 ALL_TARGETS=(mlspaces-classic mlspaces-filament mlspaces-molmoact2 mlspaces-m2t2
              mlspaces-tiptop mlspaces-dreamzero mlspaces-cosmos-policy openpi)
@@ -528,8 +536,9 @@ print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}  transform
 ok = True
 if not transformers.__version__.startswith("4.57"):
     print("  FAIL: MolmoAct2's remote code wants transformers 4.57.x"); ok = False
-if "sm_120" not in " ".join(torch.cuda.get_arch_list()):
-    print("  FAIL: sm_120 missing from torch arch_list"); ok = False
+_sm = os.environ["EXPECTED_SM"]
+if _sm not in " ".join(torch.cuda.get_arch_list()):
+    print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
 import fastapi, json_numpy, uvicorn  # noqa: F401
 from huggingface_hub import snapshot_download
 repo_id = os.environ["MOLMOACT2_REPO_ID"]
@@ -561,8 +570,9 @@ EOF
 import os, sys, torch
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
 ok = True
-if "sm_120" not in " ".join(torch.cuda.get_arch_list()):
-    print("  FAIL: sm_120 missing from torch arch_list"); ok = False
+_sm = os.environ["EXPECTED_SM"]
+if _sm not in " ".join(torch.cuda.get_arch_list()):
+    print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
 try:
     import pointnet2_ops._ext  # noqa: F401  the CUDA extension, not just the python package
     print("  pointnet2_ops CUDA extension OK")
@@ -585,8 +595,9 @@ import os, sys, torch
 from importlib.metadata import version, PackageNotFoundError
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
 ok = True
-if "sm_120" not in " ".join(torch.cuda.get_arch_list()):
-    print("  FAIL: sm_120 missing from torch arch_list"); ok = False
+_sm = os.environ["EXPECTED_SM"]
+if _sm not in " ".join(torch.cuda.get_arch_list()):
+    print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
 try:
     import curobo  # noqa: F401
     from curobo.wrap.reacher.motion_gen import MotionGen  # noqa: F401
@@ -614,12 +625,13 @@ EOF
         ;;
       mlspaces-dreamzero)
         "$PY" - <<'EOF' || rc=1
-import inspect, sys, torch, flash_attn, transformers  # noqa: F401
+import inspect, os, sys, torch, flash_attn, transformers  # noqa: F401
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}  "
       f"flash_attn {flash_attn.__version__}  transformers {transformers.__version__}")
 ok = True
-if "sm_120" not in " ".join(torch.cuda.get_arch_list()):
-    print("  FAIL: sm_120 missing from torch arch_list"); ok = False
+_sm = os.environ["EXPECTED_SM"]
+if _sm not in " ".join(torch.cuda.get_arch_list()):
+    print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
 import groot.vla.model.dreamzero.base_vla as bv
 if "compute_device" not in inspect.getsource(bv.VLA.prepare_input):
     print("  FAIL: dreamzero single-GPU patch NOT applied "
@@ -631,13 +643,14 @@ EOF
         ;;
       mlspaces-cosmos-policy)
         "$PY" - <<'EOF' || rc=1
-import sys, torch
+import os, sys, torch
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
 ok = True
 if "cu130" not in torch.__version__:
     print("  FAIL: torch is not the cu130 build"); ok = False
-if "sm_120" not in " ".join(torch.cuda.get_arch_list()):
-    print("  FAIL: sm_120 missing from torch arch_list"); ok = False
+_sm = os.environ["EXPECTED_SM"]
+if _sm not in " ".join(torch.cuda.get_arch_list()):
+    print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
 for mod, label in (("natten", "natten"),
                    ("openpi_server.websocket_policy_server", "openpi_server"),
                    ("cosmos_framework.scripts.action_policy_server_robolab",
