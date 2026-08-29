@@ -19,7 +19,7 @@ from openpi_client import msgpack_numpy
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.policy.base_policy import InferencePolicy
-from molmo_spaces.policy.learned_policy.utils import resize_with_pad
+from molmo_spaces.policy.learned_policy.utils import shard_port, resize_with_pad
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -145,7 +145,10 @@ class DreamZero_Policy(InferencePolicy):
 
     def _prepare_remote_model(self):
         host = self.remote_config.get("host", "localhost")
-        port = self.remote_config.get("port", 6000)
+        # Shard across server instances when several are running (see
+        # molmo_spaces/policy/learned_policy/utils.py's shard_port). No-op at the
+        # default of one instance.
+        port = shard_port(self.remote_config.get("port", 6000))
 
         max_retries = 5
         for attempt in range(max_retries):

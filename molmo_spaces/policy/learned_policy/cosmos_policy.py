@@ -8,6 +8,7 @@ from PIL import Image
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.policy.base_policy import InferencePolicy
+from molmo_spaces.policy.learned_policy.utils import shard_port
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -72,7 +73,10 @@ class Cosmos_Policy(InferencePolicy):
         from openpi_client import websocket_client_policy
 
         host = self.remote_config.get("host", "localhost")
-        port = self.remote_config.get("port", 8003)
+        # Shard across server instances when several are running (see
+        # molmo_spaces/policy/learned_policy/utils.py's shard_port). No-op at the
+        # default of one instance.
+        port = shard_port(self.remote_config.get("port", 8003))
 
         max_retries = 5
         for attempt in range(max_retries):

@@ -20,6 +20,7 @@ import websockets.sync.client
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.policy.base_policy import InferencePolicy
+from molmo_spaces.policy.learned_policy.utils import shard_port
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -161,7 +162,10 @@ class TiptopPolicy(InferencePolicy):
         if not self.remote_config:
             raise ValueError("TiPToP policy only supports remote model inference")
         host = self.remote_config["host"]
-        port = self.remote_config["port"]
+        # Shard across server instances when several are running (see
+        # molmo_spaces/policy/learned_policy/utils.py's shard_port). No-op at the
+        # default of one instance.
+        port = shard_port(self.remote_config["port"])
         max_retries = self.remote_config["max_retries"]
 
         for attempt in range(max_retries):

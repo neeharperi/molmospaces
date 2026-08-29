@@ -1,5 +1,6 @@
 import hashlib
 import logging
+import os
 
 import numpy as np
 from PIL import Image
@@ -244,3 +245,38 @@ def generate_object_hash(asset_id: str) -> str:
     hasher = hashlib.md5()
     hasher.update(asset_id.encode())
     return hasher.hexdigest()
+
+
+def shard_port(base_port: int, env_var: str = "MLSPACES_POLICY_INSTANCES") -> int:
+    """Pick this worker's server port when a policy is served by several instances.
+
+    Returns ``base_port + (worker_id % n)``, where ``n`` comes from ``$MLSPACES_POLICY_INSTANCES``
+    (default 1, i.e. unchanged behaviour and the single-instance path stays byte-identical).
+
+    The problem this solves. The slowest policies in the DROID campaign are bottlenecked on a
+    server that performs one inference at a time -- DreamZero literally runs
+    ``--nproc_per_node=1``. Adding eval workers past that does not add throughput, it adds
+    queueing: at 4 workers DreamZero logged 660 handshake timeouts and, after the client's
+    5-attempt give-up, silently skipped 5 episodes. A cell that quietly evaluates fewer
+    episodes than the benchmark holds is not comparable to the leaderboard, which is the whole
+    reason for running it.
+
+    So instead of one server and N queued workers, run N servers on consecutive ports and give
+    each worker its own. ``MLSPACES_WORKER_ID`` is published per worker process by
+    ``molmo_spaces/data_generation/pipeline.py``.
+
+    Deliberately a modulo rather than an assertion that workers <= instances: over-subscribing
+    degrades to the old queueing behaviour, which is slow but correct, whereas hard-failing
+    mid-campaign on a mismatch would lose a cell.
+    """
+    try:
+        n = max(1, int(os.environ.get(env_var, "1")))
+    except ValueError:
+        n = 1
+    if n == 1:
+        return base_port
+    try:
+        worker = int(os.environ.get("MLSPACES_WORKER_ID", "0"))
+    except ValueError:
+        worker = 0
+    return base_port + (worker % n)
