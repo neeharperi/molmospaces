@@ -33,6 +33,20 @@
 # do; it is still the half that matters for 28 render workers. The node CPU lists are read
 # from /sys rather than hardcoded, so this survives a different machine.
 #
+# FILAMENT IS NOT STEERABLE, and the lane table above cannot change that.
+# MUJOCO_EGL_DEVICE_ID is an EGL knob; the filament renderer is Vulkan and picks its own
+# physical device. Measured: it ignores both MUJOCO_EGL_DEVICE_ID and CUDA_VISIBLE_DEVICES and
+# lands on the same card every time. Neither the Vulkan loader (1.3.204) nor NVIDIA's ICD
+# exposes a device-select variable, and mujoco's filament build exposes none either.
+#
+# So in a filament phase every lane's rendering concentrates on one GPU regardless of LANE_GPU,
+# while the policy servers stay where this table puts them. That is a throughput concern, not a
+# correctness one: 8 concurrent filament contexts were verified working on this hardware, with
+# no errors and no "HandleAllocator arena is full" warning. The reference campaign capped
+# filament at --num_workers 1 because 4 contexts failed on its 48 GB cards; that limit does not
+# hold here, and raising it is the single biggest wall-clock lever in the campaign, so it is
+# worth re-testing against a real cell before accepting 1.
+
 # NOTE this host is SHARED. Another user's jobs sit on all four GPUs. Memory headroom is
 # ample, but they consume compute, so wall-clock will exceed a dedicated-node estimate.
 set -uo pipefail
@@ -55,8 +69,6 @@ LANES=(
   "pi0_droid      3 1"
 )
 
-# MUJOCO_EGL_DEVICE_ID for a given nvidia-smi GPU index. Populated by probe_egl_mapping.py --
-# NOT assumed to be the identity, and NOT the stale reversed constant the 2-GPU host used.
 # CPU list for a NUMA node, e.g. "0-55,112-167". Empty if the node does not exist.
 cpus_for_node() { cat "/sys/devices/system/node/node$1/cpulist" 2>/dev/null; }
 
@@ -67,10 +79,18 @@ numa_for_gpu() {
     cat "/sys/bus/pci/devices/${bus}/numa_node" 2>/dev/null
 }
 
+# MUJOCO_EGL_DEVICE_ID for a given nvidia-smi GPU index, from the cached map that
+# scripts/probe_egl_mapping.py writes (regenerated here if absent). Reading a machine-readable
+# file beats scraping the probe's prose, and beats assuming identity: it happens to BE identity
+# on this host, but that was MEASURED -- on the 2-GPU host this campaign started on it was
+# reversed, and under the Mesa EGL vendor here it also reads as reversed.
+EGL_MAP="runs/_egl_mapping.txt"
 egl_for() {
-    "$ENVS/mlspaces-classic/bin/python" scripts/probe_egl_mapping.py 2>/dev/null \
-      | awk -v g="$1" '/-> *MUJOCO_EGL_DEVICE_ID=/ && $5 == g {sub(/.*=/,"",$NF); print $NF}' \
-      | head -1
+    if [ ! -s "$EGL_MAP" ]; then
+        echo "  no $EGL_MAP; measuring (about 60s)..." >&2
+        "$ENVS/mlspaces-classic/bin/python" scripts/probe_egl_mapping.py >&2 || return 1
+    fi
+    awk -v g="$1" '$1 !~ /^#/ && $1 == g {print $2; found=1} END{exit !found}' "$EGL_MAP"
 }
 
 start_servers() {

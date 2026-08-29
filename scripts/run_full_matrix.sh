@@ -66,6 +66,10 @@ read -r -a CLASSIC_TASKS <<< "$(tasks_for classic)"
 read -r -a FILAMENT_TASKS <<< "$(tasks_for filament)"
 
 source "${CONDA_SH:-$HOME/anaconda3/etc/profile.d/conda.sh}"
+# This host has no NVIDIA EGL/Vulkan userspace installed system-wide (compute-only driver);
+# without this, classic cannot create a GL context and filament cannot start. Sourced here as
+# well as from the conda activate.d hooks, so the campaign path does not depend on those.
+. "$PWD/scripts/nvidia_gl_env.sh"
 export MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/mlspaces-assets}"
 export MLSPACES_FORCE_INSTALL=False
 export MLSPACES_PINNED_ASSETS_FILE="$PWD/reference/pinned_assets_20260816.json"
