@@ -1528,3 +1528,44 @@ should be measured against it before being built. The levers that DID work were 
 removed wasted work rather than adding parallelism -- disabling encoder offload (1531 needless
 reloads per cell), unsharding the DiT, and matching worker count to the server's actual
 inference slots (which removed 660 handshake timeouts and 5 lost episodes).
+
+### Cosmos-Edge misses Pick-v2-classic 4x, and the leaderboard's own ambiguity is the prime suspect
+
+`cosmos_edge` / `Pick-v2-classic`, full coverage: **8.20% (82/1000)** against a leaderboard
+entry of **32.30%**. The cell itself is clean -- 0 rollout errors, 0 skipped work items -- so
+this is a real measurement, not a harness failure.
+
+Three policies have now run this same cell on this same harness, the same night:
+
+| policy | ours | leaderboard | delta |
+|---|---|---|---|
+| `pi05_droid` | 8.00% | 6.38% | +1.6pp |
+| `molmoact2_droid` | 18.10% | 20.50% | -2.4pp (PASS) |
+| `cosmos_edge` | 8.20% | 32.30% | **-24.1pp** |
+
+Two land next to their entries and one is 4x off. A harness-level defect cannot be that
+selective -- it would have to spare pi05 and MolmoAct2 while destroying Cosmos.
+
+**The likely explanation is in `reference/README.md`, recorded before any of this ran**: the
+leaderboard has exactly ONE `cosmos` row, and *"does not say which of the two DROID checkpoints
+(Cosmos3-Edge-Policy-DROID, 4B, or Cosmos3-Nano-Policy-DROID, 16B) produced this row"*. Campaign
+1 deliberately duplicated that single row under both `cosmos_edge` and `cosmos_nano` in the
+snapshot so a comparison would match *both* rather than silently matching neither, and warned:
+*"Treat a PASS/FAIL for either as weaker evidence than the other policies' unambiguous
+comparisons."* This is that caveat coming due.
+
+**The discriminator is already running.** `cosmos_nano` is executing the identical cell -- same
+wrapper, same server script, same flags, only the checkpoint differs (16B vs 4B). Two outcomes:
+
+- **Nano lands near 32.3%** -> the published row is Nano's, the wrapper is correct, and Edge
+  simply has no reference number on this benchmark. Edge's 8.2% becomes a new data point rather
+  than a failure, and is unremarkable next to pi05's 8.0% on the same hard-pick task.
+- **Nano also misses badly** -> the fault is in the shared Cosmos wrapper, and the specific
+  things to audit are the ones campaign 1 flagged as guessed rather than verified: the
+  `policy_dt_ms=66.0` control rate (its own open question, since the leaderboard CSVs report a
+  meaningless `# dt`), `chunk_size=8` against the server's own default of 32, and the LANCZOS
+  pre-resize to a 640x360 canvas when this benchmark's cameras deliver 624x352.
+
+Not diagnosing further until that cell lands: with a clean 1000-episode run in hand and a clean
+1000-episode control arriving, guessing at the cause now would be the sort of plausible-story
+debugging that has cost this project days already.
