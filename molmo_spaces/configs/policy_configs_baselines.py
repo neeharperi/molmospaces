@@ -39,6 +39,15 @@ class Pi0PolicyConfig(PiPolicyConfig):
 
     checkpoint_path: str = "third_party/openpi/checkpoints/pi0_droid_jointpos"
     remote_config: dict | None = dict(host="localhost", port=8081)
+    # chunk_size is inherited (8) and that is deliberate, but it is worth stating why rather
+    # than leaving it to look like a copy-paste. The two checkpoints do NOT share an action
+    # horizon: openpi registers pi0_droid_jointpos with action_horizon=10 and
+    # pi05_droid_jointpos with 15 (src/openpi/training/config.py:1043 and :684). chunk_size is
+    # how many of each returned chunk PI_Policy executes before re-querying, so it must stay
+    # <= the horizon -- executing a chunk longer than the model returns is exactly the failure
+    # that silently cost MolmoAct2 5 of every 15 actions (see docs/eval_reproduction.md).
+    # 8 <= 10, so this is safe, and keeping it equal to pi0.5's means the two lanes differ
+    # only by the checkpoint, which is the comparison we actually want.
 
 
 class MolmoAct2PolicyConfig(BasePolicyConfig):
