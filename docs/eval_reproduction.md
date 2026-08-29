@@ -1226,3 +1226,83 @@ timestamp.
   only 2 cameras total (`wrist_camera`, `exo_camera_1`) -- there is no second exterior view
   for these three tasks in the real asset rig, so `DreamZero_Policy`'s duplication fallback
   (now logged, not silent) is expected and unavoidable there, not a bug to fix further.
+
+---
+
+# Campaign 2 (2026-08-28-): re-run on 4x H100 NVL, seven policies
+
+Everything above was produced on a different machine. This section records what changed, so
+that a number from campaign 1 and a number from campaign 2 can be compared honestly.
+
+## What moved
+
+The work lived in a second clone as six commits plus a large uncommitted working tree, and has
+been ported onto current `main` (`1320b26`, which added the gym API). The port was done in
+three ordered stages -- cherry-pick, then the seven untracked files, then the fourteen
+genuinely-modified tracked files -- and verified with a recursive tree diff whose residue was
+exactly the eight files `main` had gained plus three symlinks. Nothing was dropped.
+
+One deliberate exclusion: the reference tree had `docs/evaluation_guide.md`, `docs/mb-bench.md`
+and `docs/ms-bench.md` staged as deleted. All three are symlinks into `molmo_spaces/evaluation/`
+and `mkdocs.yml:47` still references one, so that deletion was an artifact of the other
+checkout rather than a decision. It was not ported. This is the concrete reason the port could
+not be done as a single bulk working-tree copy: a bulk copy cannot distinguish an intended
+change from an accident.
+
+## Hardware, and the two divergences it forces
+
+| | campaign 1 | campaign 2 |
+|---|---|---|
+| GPUs | 2x RTX PRO 5000 Blackwell, sm_120, 48 GB | 4x H100 NVL, sm_90, 95 GB |
+| `$HOME` | `/home/nperi` | `/data/neehar` |
+| peer `robot-prompt-opt` | present | **absent** |
+
+Both divergences are recorded in `docs/env_parity.md`: `TORCH_CUDA_ARCH_LIST` 12.0 -> 9.0 with
+matching `sm_90` assertions, and `DREAMZERO_DIT_SPLIT` 12 -> 0 (the split existed only to fit a
+48 GB card; the patch's own default is 0). **No version pin changed** -- the cu129/cu130 wheel
+indices and every exact pin are what make the two campaigns comparable, and none of them is
+arch-specific.
+
+Peer environment parity is now unverifiable, which is a genuine reduction in a deliverable
+BENCHMARK.md declared pass/fail. `scripts/setup_envs.sh --check` is the operative gate instead;
+it is a functional verification rather than a similarity check.
+
+## Seventh policy: pi0-DROID
+
+Added alongside pi0.5. It shares the `PI_Policy` wrapper, the openpi msgpack websocket, the
+joint-position action space and the `openpi` venv, so it is a `PolicySpec` plus two config
+subclasses -- `Pi0PolicyConfig`/`Pi0PolicyEvalConfig` -- not a new integration. Checkpoint
+`gs://openpi-assets/checkpoints/pi0_droid_jointpos` (12.0 GB), config `pi0_droid_jointpos`,
+port **8081** (pi0.5 keeps 8080; both servers run concurrently and `eval_main.py` has no CLI
+override for `remote_config.port`).
+
+Its leaderboard coverage is **Group A only**, the same shape as DreamZero -- Open-v1 11.00%
+(110/1000), Close-v1 53.11% (486/915), both on the `oracle` metric. All seven Group B slugs
+return the SPA's HTML shell. So its pre-flight pair is Open-v1 + Close-v1 and its Group B cells
+are new data points; it is registered in `INFORMATIONAL_POLICIES`. A sibling `pi0_fast` slug
+also resolves with the same Group-A-only coverage (11.09% / 38.58%) but is a different
+checkpoint and is not currently evaluated.
+
+Matrix: **7 policies x 9 tasks = 63 cells, 45 of them comparable to a leaderboard entry.**
+
+## Running seven servers on four GPUs
+
+Campaign 1 ran one policy at a time. This one runs all seven concurrently, which required three
+things that did not exist before.
+
+1. **`scripts/run_full_matrix.sh` is lane-aware.** `MUJOCO_EGL_DEVICE_ID` is now *required*
+   rather than defaulted to 1. The old default carried a comment that the EGL index was
+   reversed from `nvidia-smi`'s ordering -- true of the 2-GPU host, and not a fact that
+   travels. A stale default on a 4-GPU host puts every lane on one card: nothing errors,
+   nothing logs, the campaign just runs slower under more contention. `scripts/probe_egl_mapping.py`
+   resolves the mapping per host using the same `eglQueryDevicesEXT()` call the renderer
+   itself indexes into.
+2. **`scripts/serve_openpi.sh` and `scripts/serve_molmoact2.sh`** now exist; both were launched
+   by hand before. `serve_openpi.sh` disables JAX preallocation --- `jax[cuda12]` takes 75% of
+   the visible device by default, ~71 GiB of a 95 GiB H100, for ~12 GiB of weights. Left alone
+   it starves whatever shares the card, and the failure surfaces as the *other* server OOMing
+   at warmup, which reads as that policy's bug. This is what lets pi0 and pi0.5 co-reside.
+3. **`scripts/campaign_status.py`** prints the grid from `runs/` alone. Its stall detector
+   keys on log silence rather than TCP reachability, which is the signal that would have caught
+   campaign 1's 8-hour hang -- there the server had died and been restarted while the client
+   retried forever, so the port was open the whole time.

@@ -1,4 +1,37 @@
-# Environment parity with `robot-prompt-opt`
+# Environment parity
+
+> ## STATUS ON THIS MACHINE (2026-08-28): peer parity is UNVERIFIABLE, and that is a real
+> ## reduction in a deliverable BENCHMARK.md declared pass/fail. Read this before the rest.
+>
+> Everything below this box was written for a host that had `~/Workspace/robot-prompt-opt`
+> checked out beside this repo. **That peer does not exist on this machine.** There is nothing
+> for `scripts/check_env_parity.py` to diff against and nothing for
+> `scripts/check_cross_repo_cell.py` to run in, so the tier-2 "copied recipe plus a drift
+> check" mechanism described below is reduced to "copied recipe". Both scripts are kept --
+> they document the intent and would work again beside a peer -- but they are inert here.
+> This is recorded rather than quietly dropped, because BENCHMARK.md lists
+> `check_env_parity.py exits zero` as an acceptance criterion and it now cannot be met.
+>
+> **What still holds.** The recipe was always the real artifact: the peer's `uv.lock`,
+> `pixi.lock` and Dockerfiles were inert there too (see "Mechanism" below), and its
+> environments were built by the same hand-translated `conda create` + `pip install` sequence
+> `scripts/setup_envs.sh` carries. Every pin in that script is unchanged, so the environments
+> here resolve from the same recipe the recorded numbers came from.
+>
+> **What replaces the peer diff.** `scripts/setup_envs.sh --check` -- a *functional*
+> verification, and a stronger one than a package-list diff for the failure modes that
+> actually cost this campaign results: it asserts the CUDA arch is present in the torch build,
+> the exact pins are installed, the source-built CUDA extensions import, and the checkpoints
+> declare what the wrappers assume. It does not assert similarity to anything.
+>
+> **Two intentional divergences from the recorded environments, both forced by hardware:**
+>
+> | # | divergence | why |
+> |---|---|---|
+> | A | `TORCH_CUDA_ARCH_LIST=9.0`, assertions require `sm_90` (was `12.0` / `sm_120`) | This host is 4x H100 NVL (Hopper). The recorded campaign ran on 2x RTX PRO 5000 (Blackwell). Affects only the compile target for cuRobo, cuTAMP and pointnet2_ops -- all three build CUDA kernels from source and neither arch is a default. No version pin changed. |
+> | B | `DREAMZERO_DIT_SPLIT=0` rather than `12` | The split exists solely to fit a 48 GB card; the patch's own default is 0. At 95 GB the model is resident on one GPU, which also drops the ~20% pipeline-shard throughput penalty documented in `scripts/dreamzero_patches/0001-single-gpu-48gb-inference.patch`. A behaviour change versus the recorded run, so it is named here rather than left implicit. |
+>
+> Divergence #1 below (the `openpi` fork/checkpoint) still stands and is unrelated to hardware.
 
 BENCHMARK.md makes this a pass/fail deliverable, not a nice-to-have: the point of reproducing
 known leaderboard numbers is to license comparisons, and a comparison across two repos with
@@ -6,13 +39,14 @@ silently divergent CUDA or `transformers` pins isn't licensed by anything. This 
 register of what is shared, what differs, and why.
 
 - **Built by**: `scripts/setup_envs.sh` (this repo) and
-  `~/Workspace/robot-prompt-opt/scripts/setup_envs.sh` (the peer).
+  `~/Workspace/robot-prompt-opt/scripts/setup_envs.sh` (the peer, ABSENT here -- see the box above).
 - **Enforced by**: `scripts/check_env_parity.py`, which diffs the resolved distribution set of
   each paired environment and exits non-zero on any difference not listed in the
-  `parity-allow` block at the bottom of this file.
+  `parity-allow` block at the bottom of this file. **Inert on this machine.**
 - **Verified working by**: `scripts/setup_envs.sh --check`, which is a different question --
   it asserts each env *functions* (CUDA arch, exact pins, source-built extensions import,
   checkpoints declare what the wrappers assume), not that it matches the peer.
+  **This is the operative gate here.**
 
 ## Mechanism: copied recipe plus a drift check
 
