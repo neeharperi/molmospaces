@@ -115,7 +115,9 @@ class TiptopPolicyConfig(BasePolicyConfig):
     """Ported from allenai/molmospaces_policy_zoo's molmospaces_zoo/tiptop/config.py."""
 
     policy_type: str = "tamp"
-    remote_config: dict = dict(host="localhost", port=8765, max_retries=5)
+    # 18765, not upstream's 8765 -- another user on this shared host holds 8765. See the
+    # note in scripts/eval_common.py's POLICIES table.
+    remote_config: dict = dict(host="localhost", port=18765, max_retries=5)
 
     # TiPToP requires depth from the wrist camera.
     force_enable_depth: bool = True

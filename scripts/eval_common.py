@@ -156,7 +156,12 @@ POLICIES: dict[str, PolicySpec] = {
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:TiptopEvalConfig",
         checkpoint_path="",  # TiPToP's server owns its own model/planner state, no client-side checkpoint path
         host="localhost",
-        port=8765,
+        # 18765, not upstream's default 8765: this is a SHARED host and another user's process
+        # already listens on 8765. Our server could never bind ("address already in use", 21
+        # supervisor restarts), while the client happily connected to THEIR server and failed
+        # the websocket handshake -- surfacing as "[SSL: WRONG_VERSION_NUMBER]" from the
+        # client's wss:// fallback, which names neither the port nor the real problem.
+        port=18765,
     ),
     "dreamzero": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:DreamZeroPolicyEvalConfig",
