@@ -29,9 +29,24 @@ case "$GROUP" in all|group-a|group-b) ;; *) echo "bad group '$GROUP' (want all|g
 DATE_TAG="${DATE_TAG:-20260819_full}"
 CLASSIC_WORKERS="${CLASSIC_WORKERS:-4}"
 FILAMENT_WORKERS="${FILAMENT_WORKERS:-1}"
-# EGL device index -> physical GPU is REVERSED from nvidia-smi's ordering on this host
-# (verified via DRM render-node PCI IDs): MUJOCO_EGL_DEVICE_ID=1 renders on nvidia-smi GPU0.
-export MUJOCO_EGL_DEVICE_ID="${MUJOCO_EGL_DEVICE_ID:-1}"
+# LANE AWARENESS. The campaign runs one copy of this script per policy, concurrently, each
+# rendering on its own GPU. LANE_GPU is the nvidia-smi index this lane owns (logging and
+# numactl only); MUJOCO_EGL_DEVICE_ID is the EGL device index that actually renders there.
+#
+# Both are REQUIRED, not defaulted, and that is the point. This used to default to 1, with a
+# comment that the EGL index was reversed from nvidia-smi's ordering -- true of the 2-GPU
+# Blackwell host the campaign started on, and not a fact that travels. A stale default on a
+# 4-GPU host puts every lane on one card: nothing errors, no log says anything, the campaign
+# just runs N times slower under N times the contention. A missing required variable fails at
+# second zero instead. Run scripts/probe_egl_mapping.py for this host's table.
+LANE_GPU="${LANE_GPU:?set LANE_GPU to the nvidia-smi GPU index this lane owns}"
+export MUJOCO_EGL_DEVICE_ID="${MUJOCO_EGL_DEVICE_ID:?set from scripts/probe_egl_mapping.py for LANE_GPU=$LANE_GPU}"
+
+# 7 lanes x 4 classic workers = 28 MuJoCo processes on 224 CPUs. Uncapped, each one's BLAS
+# spawns a thread per core and they thrash rather than share.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-$OMP_NUM_THREADS}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-$OMP_NUM_THREADS}"
 
 # Task lists are derived from scripts/eval_common.py so the renderer split and the
 # group membership are defined exactly once (eval_common has no third-party imports, so
@@ -61,10 +76,15 @@ run_phase() {
     [ "$#" -gt 0 ] || { echo "=== no $GROUP tasks for env=$env_name, skipping phase ==="; return 0; }
     conda activate "$env_name"
     for task in "$@"; do
-        echo "=== [$(date +%H:%M:%S)] $POLICY / $task  (env=$env_name, workers=$workers, FULL coverage) ==="
+        echo "=== [$(date +%H:%M:%S)] $POLICY / $task  (env=$env_name, workers=$workers, gpu=$LANE_GPU, egl=$MUJOCO_EGL_DEVICE_ID, FULL coverage) ==="
         python scripts/eval.py --policy "$POLICY" --task "$task" \
             --num_workers "$workers" --date "$DATE_TAG"
-        echo "    -> exit $?"
+        rc=$?
+        echo "    -> exit $rc"
+        # Collected rather than fatal: one failing cell must not abort the rest of the lane,
+        # but a lane that quietly failed 4 of 9 cells should not print an unqualified
+        # "complete" either.
+        [ $rc -eq 0 ] || FAILED_CELLS="${FAILED_CELLS:-} $task"
     done
     conda deactivate
 }
@@ -72,4 +92,4 @@ run_phase() {
 [ "$PHASE" = "classic" ] || [ "$PHASE" = "all" ] && run_phase mlspaces-classic "$CLASSIC_WORKERS" "${CLASSIC_TASKS[@]}"
 [ "$PHASE" = "filament" ] || [ "$PHASE" = "all" ] && run_phase mlspaces-filament "$FILAMENT_WORKERS" "${FILAMENT_TASKS[@]}"
 
-echo "=== [$(date +%H:%M:%S)] $POLICY matrix phase='$PHASE' group='$GROUP' complete ==="
+echo "=== [$(date +%H:%M:%S)] $POLICY matrix phase='$PHASE' group='$GROUP' complete; failed cells:${FAILED_CELLS:- none} ==="
