@@ -1726,3 +1726,27 @@ Running scoreboard: **4 verdicts, 3 PASS.**
 | Open-v1 | `pi0_droid` | 9.80% (1000) | 11.00% | PASS |
 | Pick-v2-classic | `molmoact2_droid` | 18.10% (999) | 20.50% | PASS |
 | Pick-v2-classic | `pi05_droid` | 8.00% (1000) | 6.38% | FAIL (marginal, -0.09pp) |
+
+### Close-v1 lands on the leaderboard's exact n, and PASSES
+
+`pi05_droid` / `Close-v1`: **67.20% (615/915)** against the leaderboard's **65.14%** -- PASS,
+with **n=915 matching the leaderboard's own n=915 exactly**, `max_episodes=None`, 0 rollout
+errors.
+
+The episode count is the point as much as the rate. Close-v1 was campaign 1's clearest
+oversampling casualty: `--max_episodes 500` drew **n=6000 from just 27 houses**, with
+per-category counts (`Chestofdrawers` 1813, `Stand` 2005, `Drawer` 1524) each exceeding the
+entire 915-episode benchmark. That run's 66.12% was recorded as a PASS and then retracted --
+"the Wilson interval assumes independent trials and is far too narrow" -- and its reweighted
+value had already fallen outside.
+
+Two independent oversampling mechanisms had to be removed to get here: the `--max_episodes`
+house-selection behaviour (campaign 1's finding, avoided by never passing the flag) and the 8x
+work-item duplication in `JsonEvalRunner` (campaign 2's finding, fixed in code). Hitting 915
+on the nose is the evidence that neither is left.
+
+The rate lands close to campaign 1's oversampled 66.12% too, which is reassuring in a specific
+way: the earlier number was not wildly wrong, it was *unjustifiably precise*. The defect was in
+the interval, not the point estimate.
+
+pi05_droid now has Group A complete: Open-v1 PASS, Close-v1 PASS.
