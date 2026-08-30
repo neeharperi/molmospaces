@@ -1700,3 +1700,29 @@ Two lessons, both cheap:
 2. **Check for orphaned partials after any kill**: a cell directory with `eval_output/` but no
    `provenance.json`, whose log has not been written to recently, is an orphan. It must be
    removed before the lane reaches that task again.
+
+### pi0-DROID PASSES its first comparable cell
+
+`pi0_droid` / `Open-v1`: **9.80% (98/1000)** against the leaderboard's **11.00%** -- PASS.
+n=1000, `max_episodes=None`, seed 42, 0 rollout errors.
+
+This is the first verdict for the policy added in campaign 2, and it exercises everything that
+integration touched: `Pi0PolicyConfig`/`Pi0PolicyEvalConfig`, the `pi0_droid` PolicySpec, port
+8081 alongside pi0.5 on 8080, the `pi0_droid_jointpos` checkpoint from `gs://openpi-assets`,
+and the two leaderboard rows fetched live from the benchmark site. It also confirms the
+JAX-preallocation fix in `serve_openpi.sh` -- without it, two openpi servers cannot share a GPU
+at all, and both pi0 and pi0.5 lanes have now run full-coverage cells off that pair.
+
+Worth noting what it does NOT tell us: pi0's only leaderboard entries are Open-v1 and Close-v1,
+so its seven Group B cells will be new data points with nothing to check them against. The
+same is true of DreamZero. `scripts/preflight_plan.py` reports that gap per policy rather than
+letting it pass silently.
+
+Running scoreboard: **4 verdicts, 3 PASS.**
+
+| task | policy | ours (n) | leaderboard | verdict |
+|---|---|---|---|---|
+| Open-v1 | `pi05_droid` | 20.70% (1000) | 22.70% | PASS |
+| Open-v1 | `pi0_droid` | 9.80% (1000) | 11.00% | PASS |
+| Pick-v2-classic | `molmoact2_droid` | 18.10% (999) | 20.50% | PASS |
+| Pick-v2-classic | `pi05_droid` | 8.00% (1000) | 6.38% | FAIL (marginal, -0.09pp) |
