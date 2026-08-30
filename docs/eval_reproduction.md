@@ -1779,3 +1779,46 @@ policy so it is not mistaken for coverage.
 Both Group A policies land on the leaderboard's exact episode counts (1000 and 915), and every
 cell ran with `max_episodes=None` and zero rollout errors. The single FAIL is the one cell that
 also failed on the reference machine, at a statistically indistinguishable rate.
+
+## The pi05 discrepancy is a checkpoint difference, and the leaderboard's own headers say so
+
+Campaign 1 ended with an open question: its full-coverage pi05 cells all missed the leaderboard
+*upward*, and it suspected the published Group B numbers came from a different checkpoint but
+could not test it. Campaign 2 can, because it has pi05 verdicts on both task groups.
+
+**The pass/fail split falls exactly along the provenance line in the leaderboard's own CSVs.**
+
+| leaderboard rows | `# run_path` header | our result |
+|---|---|---|
+| Open-v1 | `/home/orayyan/projects/molmospaces/eval_output/new_results/open/pi05` | 20.70% vs 22.70% **PASS** |
+| Close-v1 | `/home/orayyan/projects/molmospaces/eval_output/new_results/close/pi05` | 67.20% vs 65.14% **PASS** |
+| Pick-v1.5 | `/weka/prior/abhayd/**sim_cotraining_output**/eval_runs_openpi/20260324_182515_pick_msproc_pi05/...` | 23.30% vs 18.05% **FAIL, high** |
+| Pick-v2-classic | `/weka/prior/abhayd/**sim_cotraining_output**/eval_runs_openpi/20260324_182520_pick_classic_pi05/...` | 8.00% vs 6.38% **FAIL, high** |
+
+Rows produced by a plain evaluation we reproduce. Rows produced out of a **sim co-training
+output tree**, with a different eval config (`PiPnPBenchmarkEvalConfig`) on 2026-03-24, we
+exceed -- consistently, and in the direction that rules out an integration defect, since wiring
+bugs cost score rather than adding it.
+
+**Both Group B cells also reproduce across machines**, which removes the remaining alternative
+explanation (that something about this host inflates results):
+
+| cell | reference machine | this machine | two-proportion z |
+|---|---|---|---|
+| Pick-v1.5 | 23.70% (237/1000) | 23.30% (233/1000) | **0.21** |
+| Pick-v2-classic | 8.70% (87/1000) | 8.00% (80/1000) | **0.57** |
+
+Two independent machines -- different GPU architecture, driver, rendering stack -- agree with
+each other and disagree with the leaderboard, only on the rows whose headers point at a
+co-trained checkpoint.
+
+**Conclusion.** `pi05_droid_jointpos` is not the checkpoint behind the leaderboard's pi05 Group
+B rows. The harness reproduces the rows that were made the same way we make ours, on the exact
+episode sets (n=1000, n=915), with zero rollout errors. The correct reading of the two Group B
+FAILs is "different model", not "broken harness" -- and this is testable evidence for that
+reading rather than the inference campaign 1 could only gesture at.
+
+This does **not** excuse a future Group B miss for another policy. MolmoAct2 PASSES
+Pick-v2-classic (18.10% vs 20.50%) on the same harness, same night, so Group B cells are
+reproducible in general. The claim is specific to pi05's Group B rows and rests on their own
+recorded provenance.
