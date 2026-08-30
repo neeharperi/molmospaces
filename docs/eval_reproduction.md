@@ -1651,3 +1651,31 @@ were all wrong: counting `house N episode M` log markers undercounted so badly i
 2115 s/episode for a cell actually running at ~218, and counting "saved trajectory data for
 house_" lines reported 296 houses for a 41-house benchmark. Both errors pointed toward
 restarting healthy lanes. A progress metric that is wrong pessimistically is worse than none.
+
+### First honest full-coverage bench-v1 cell: pi05 Open-v1 PASSES
+
+`pi05_droid` / `Open-v1`: **20.70% (207/1000)** against the leaderboard's **22.70%** -- PASS.
+`n_episodes=1000`, `max_episodes=None`, seed 42, **0 rollout errors**, and the count matches
+both the benchmark's own size and the leaderboard's own n=1000 exactly.
+
+This is the first Open-v1 or Close-v1 cell either campaign has produced at honest full
+coverage, and it closes out a question campaign 1 left open. Its Open-v1 attempts went:
+
+| attempt | result | status |
+|---|---|---|
+| `--max_episodes 50`, pre-grasp-fix | 37.5% (n=16), single category | invalid -- 8 of 16 work items skipped |
+| `--max_episodes 50`, post-fix | 13.50% (n=400), 5 of 13 categories | FAIL raw; only "consistent" after reweighting the leaderboard to our category mix (16.84%) |
+| **campaign 2, full coverage** | **20.70% (n=1000)** | **PASS outright** |
+
+No reweighting, no caveat, no category-mix argument -- the cell simply evaluates the same
+episode set the leaderboard did and lands inside the interval. That is what campaign 1 said the
+acceptance bar was and never got to run, because `--max_episodes` was the only bench-v1 path it
+ever used and the 8x work-item oversampling underneath was invisible behind it.
+
+It also independently confirms the `grasp_libraries=["droid"]` fix ported correctly: that bug
+failed 100% of Close-v1 and skipped half of Open-v1's work items, and a cell that completes
+1000 episodes with zero skips could not happen with it present.
+
+Two of three verdicts on the board are now PASSes, and the one FAIL (pi05 Pick-v2-classic,
+8.00% vs 6.38%) is marginal at 0.09pp outside the interval and reproduces the reference
+machine's own 8.70% (z=0.57).
