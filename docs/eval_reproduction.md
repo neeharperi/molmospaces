@@ -1679,3 +1679,24 @@ failed 100% of Close-v1 and skipped half of Open-v1's work items, and a cell tha
 Two of three verdicts on the board are now PASSes, and the one FAIL (pi05 Pick-v2-classic,
 8.00% vs 6.38%) is marginal at 0.09pp outside the interval and reproduces the reference
 machine's own 8.70% (z=0.57).
+
+### Operational note: a killed cell must be DELETED, not left for the resume to find
+
+`scripts/eval.py` resumes only when BOTH `provenance.json` and `results.csv` are present. A cell
+killed mid-run has neither, so the resume does not skip it -- it re-runs into the *same*
+`eval_output/<config>/<timestamp>/` tree and the new trajectories land alongside the old ones.
+`eval_to_csv.py` then walks every h5 under that tree and counts them all, producing a cell that
+looks complete and silently mixes two runs.
+
+Hit concretely here: the sweep that stopped the oversampled bench-v1 cells also killed
+`tiptop/Pick-v2-classic` at 712/1000 episodes -- a valid bench-v2 cell that the oversampling bug
+never touched. Its 688 h5 files sat with no `provenance.json`, and the TiPToP lane was on course
+to cycle back and re-run straight into them. Deleted before that happened.
+
+Two lessons, both cheap:
+
+1. **Sweeps should be scoped to the cells actually affected.** Killing every lane to stop six
+   bench-v1 cells cost ~31h of unrelated, correct TiPToP work.
+2. **Check for orphaned partials after any kill**: a cell directory with `eval_output/` but no
+   `provenance.json`, whose log has not been written to recently, is an orphan. It must be
+   removed before the lane reaches that task again.
