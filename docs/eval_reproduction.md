@@ -1569,3 +1569,40 @@ wrapper, same server script, same flags, only the checkpoint differs (16B vs 4B)
 Not diagnosing further until that cell lands: with a clean 1000-episode run in hand and a clean
 1000-episode control arriving, guessing at the cause now would be the sort of plausible-story
 debugging that has cost this project days already.
+
+### Root cause of the Cosmos miss: one exterior view sent twice
+
+`cosmos_nano` / `Pick-v2-classic` came in at **9.80% (98/1000)** against the same 32.30% entry
+`cosmos_edge` missed at 8.20%. Both checkpoints missing by 3-4x ruled out the leaderboard's
+checkpoint ambiguity and pointed at the shared wrapper -- which is exactly why running both
+variants was worth the GPU time, rather than treating Nano as a redundant second data point.
+
+**The bug**: `cosmos_policy.py` sent the same exterior frame into both
+`observation/exterior_image_1_left` and `_2_left`, unconditionally, justified by a comment
+saying *"this benchmark exposes one exterior camera"*. That premise is true for the three
+FrankaDroidCameraSystem tasks and **false for all seven bench-v2 tasks**, which expose
+`randomized_zed2_analogue_1` *and* `_2`. The server composes a canvas whose bottom row is *"two
+horizontally concatenated"* exterior views -- its own prompt text -- and the checkpoint is
+DROID-trained, where those two slots are the two ZED2 cameras. So an entire viewpoint was being
+thrown away on every bench-v2 inference.
+
+This is `dreamzero_policy.py`'s bug #2 in a second place. Campaign 1 found and fixed it for
+DreamZero and did not check the sibling wrapper, even though `cosmos_policy.py`'s own comment
+says it copies "the same move dreamzero_client.py makes" -- it copied the pre-fix move.
+
+**What made it findable** was the discipline of running the same cell across policies. Three
+policies ran Pick-v2-classic on one harness the same night: pi05 +1.6pp, MolmoAct2 -2.4pp
+(PASS), Cosmos -24.1pp. No harness-level defect is that selective. The reference doc's own
+guidance -- that a result *"that uniform and that far from the leaderboard is itself the signal
+to distrust the harness, not the policy"* -- inverts cleanly here: when the miss is confined to
+one policy while its neighbours land, distrust that policy's wrapper.
+
+Selection now mirrors `dreamzero_policy.py` exactly, so the two DROID video policies see the
+same views, and the genuinely unavoidable bench-v1 duplication is logged rather than silently
+absorbed. Verified on a bench-v2 cell: zero duplication warnings, where the warning fires only
+when the two chosen keys are equal.
+
+Both bench-v2 Cosmos cells are quarantined under
+`runs/_INVALID_cosmos_exterior_dup_20260830/` with their before-numbers, and are being re-run.
+Bench-v1 Cosmos cells are **not** invalidated: there is one exterior camera there, so the old
+and new code paths are identical.
