@@ -1750,3 +1750,32 @@ way: the earlier number was not wildly wrong, it was *unjustifiably precise*. Th
 the interval, not the point estimate.
 
 pi05_droid now has Group A complete: Open-v1 PASS, Close-v1 PASS.
+
+### pi0-DROID: fully verified against every leaderboard entry it has
+
+`pi0_droid` / `Close-v1`: **54.60% (500/915)** against **53.11%** -- PASS, n=915 exact,
+0 rollout errors.
+
+pi0 has exactly two leaderboard entries (Open-v1 and Close-v1; all seven Group B slugs return
+the site's HTML shell), and **both now PASS**. That makes it the first policy in this campaign
+verified against its complete available reference, and it is the policy added from scratch in
+campaign 2 -- the integration is confirmed by the only evidence that can confirm it.
+
+Its remaining seven Group B cells will still run, per the full-63-cell scope, but they are new
+data points with nothing to check them against. `scripts/preflight_plan.py` flags that gap per
+policy so it is not mistaken for coverage.
+
+**Scoreboard: 6 verdicts, 5 PASS.**
+
+| task | policy | ours (n) | leaderboard | verdict |
+|---|---|---|---|---|
+| Open-v1 | `pi05_droid` | 20.70% (1000) | 22.70% | PASS |
+| Close-v1 | `pi05_droid` | 67.20% (915) | 65.14% | PASS |
+| Open-v1 | `pi0_droid` | 9.80% (1000) | 11.00% | PASS |
+| Close-v1 | `pi0_droid` | 54.60% (915) | 53.11% | PASS |
+| Pick-v2-classic | `molmoact2_droid` | 18.10% (999) | 20.50% | PASS |
+| Pick-v2-classic | `pi05_droid` | 8.00% (1000) | 6.38% | FAIL (marginal, -0.09pp) |
+
+Both Group A policies land on the leaderboard's exact episode counts (1000 and 915), and every
+cell ran with `max_episodes=None` and zero rollout errors. The single FAIL is the one cell that
+also failed on the reference machine, at a statistically indistinguishable rate.
