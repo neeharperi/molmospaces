@@ -1822,3 +1822,57 @@ This does **not** excuse a future Group B miss for another policy. MolmoAct2 PAS
 Pick-v2-classic (18.10% vs 20.50%) on the same harness, same night, so Group B cells are
 reproducible in general. The claim is specific to pi05's Group B rows and rests on their own
 recorded provenance.
+
+### MolmoAct2 misses Open-v1 downward, and both campaigns agree on the number
+
+`molmoact2_droid` / `Open-v1`: **8.81% (88/999)**, Wilson95 [7.21, 10.73], against the
+leaderboard's **11.70%** -- FAIL, and this one misses *downward*, the direction that does point
+at integration rather than at the comparison.
+
+It is not noise. Campaign 1 measured this cell at 6.50% over 5 of 13 categories and, reweighting
+the leaderboard to that truncated mix, put the comparable value at **9.03%**. Our full-coverage
+8.81% over all 13 categories sits right next to it. Two campaigns, different sampling, same
+answer -- and ~2.9pp below the published number.
+
+What it is **not**:
+
+- Not the Cosmos bug. MolmoAct2 sends exactly one exterior and one wrist camera, which is what
+  `MOLMOACT2_SCHEMAS["droid"]` specifies; there is no second slot to fill wrongly.
+- Not category coverage. At n=999 of 1000 the reweighting that rescued campaign 1's truncated
+  run is a no-op.
+- Not the pi05 provenance story. Both of MolmoAct2's rows -- the Open-v1 it fails and the
+  Pick-v2-classic it passes -- come from the **same** run_path prefix
+  (`/weka/oe-training-default/hqfang/.../molmoact2-0411-droid-posttrain_v2-discrete_states-setup`),
+  so there is no "different pipeline produced these" explanation available.
+- Not a harness defect in general. MolmoAct2 PASSES Pick-v2-classic (18.10% vs 20.50%) on the
+  same harness.
+
+So the open question is specifically: **does MolmoAct2 have a bench-v1-specific shortfall?**
+Campaign 1 left exactly this question, noting its Close-v1 was 66.77% against 71.26% and that
+"what remains is whether the residual ~4pp gap survives a like-for-like episode set". Our
+Close-v1 cell is running now at a clean n=915 and will answer it: a second ~3-4pp bench-v1 miss
+makes a pattern worth hunting; a Close-v1 PASS makes Open-v1 a single-cell anomaly.
+
+Not speculating about a cause before that lands.
+
+### Gotcha: the leaderboard's two benchmark families use DIFFERENT CSV column layouts
+
+Anyone re-fetching these numbers will hit this. bench-v1 and bench-v2 CSVs do not share a
+schema:
+
+```
+bench-v1 (ms_open):        policy,category,successes,total,success_rate_pct,ci_lo,ci_hi,
+                           oracle_successes,oracle_rate_pct,...
+bench-v2 (mb_pick_classic): policy,category,total,oracle_successes,oracle_rate_pct,ci_lo,ci_hi,
+                           jerk_joint_mean,jerk_joint_std
+```
+
+Reading a bench-v2 row with bench-v1 offsets yields plausible-looking garbage -- it reported
+"63.107614/205" (a fractional success count) for a cell whose real value is 205/1000 = 20.5%.
+Fractional successes are the tell. `scripts/category_mix_check.py` already handles the variation
+after campaign 1 hit a related case; anything else parsing these files must too.
+
+Also note the policy slug for MolmoAct2 is now **`molmoact`**, not the `molmoact2` recorded in
+`reference/README.md` -- `molmoact2` returns the site's HTML shell. All four MolmoAct2 values in
+`reference/leaderboard_snapshot.csv` (11.7, 71.26, 20.5, 43.4) were re-verified against the live
+site under the working slug and are correct.
