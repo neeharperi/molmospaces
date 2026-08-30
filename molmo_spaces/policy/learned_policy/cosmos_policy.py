@@ -101,26 +101,62 @@ class Cosmos_Policy(InferencePolicy):
         prompt = self.task.get_task_description()
         grip = np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)
 
+        # TWO DISTINCT exterior views where the benchmark has them. This server composes a
+        # canvas whose bottom row is "two horizontally concatenated" exterior views (its own
+        # prompt text), and the checkpoint is DROID-trained, where exterior_image_1_left and
+        # exterior_image_2_left are the two ZED2 cameras. Sending the same frame twice throws
+        # away a whole viewpoint the model was trained to use.
+        #
+        # This code previously duplicated one exterior unconditionally, on the stated premise
+        # that "this benchmark exposes one exterior camera". That is true of the three
+        # FrankaDroidCameraSystem tasks (Open-v1, Close-v1, Pick-v1.5) and FALSE of all seven
+        # bench-v2 tasks, which expose randomized_zed2_analogue_1 AND _2. Measured cost of the
+        # bug on Pick-v2-classic: cosmos_edge 8.2% and cosmos_nano 9.8% against a leaderboard
+        # entry of 32.3%. Identical in kind to dreamzero_policy.py's bug #2, which was fixed
+        # there and missed here.
+        #
+        # Selection mirrors dreamzero_policy.py exactly -- same benchmark, same DROID slot
+        # semantics -- so the two DROID video policies see the same views.
         if self.camera_names != ["exo_camera_1", "wrist_camera"]:
-            exo_camera_key, wrist_camera_key = self.camera_names[0], self.camera_names[1]
-        else:
-            exo_camera_key = (
-                "droid_shoulder_light_randomization"
-                if "droid_shoulder_light_randomization" in obs
-                else "exo_camera_1"
+            # Explicit --camera_names override (e.g. Pick-v2-RandCam). Honour slot 1 as given
+            # and pair it with the matching _2 when that exists.
+            exo_camera_key_0, wrist_camera_key = self.camera_names[0], self.camera_names[1]
+            exo_camera_key_1_fallback = (
+                exo_camera_key_0[:-1] + "2" if exo_camera_key_0.endswith("1") else exo_camera_key_0
             )
+        else:
+            if "randomized_zed2_analogue_1" in obs:
+                exo_camera_key_0, exo_camera_key_1_fallback = (
+                    "randomized_zed2_analogue_1",
+                    "randomized_zed2_analogue_2",
+                )
+            else:
+                exo_camera_key_0, exo_camera_key_1_fallback = "exo_camera_1", "exo_camera_2"
             wrist_camera_key = (
                 "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
             )
 
-        # PolaRiS/this benchmark both expose one exterior camera; duplicated into both
-        # exterior slots the server expects, same move dreamzero_client.py makes.
-        exterior_image = _lanczos_resize(obs[exo_camera_key], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
+        exo_camera_key_1 = (
+            exo_camera_key_1_fallback if exo_camera_key_1_fallback in obs else exo_camera_key_0
+        )
+        if exo_camera_key_1 == exo_camera_key_0:
+            # Genuinely unavoidable on the FrankaDroidCameraSystem tasks -- there is no second
+            # view to send. Logged rather than silently absorbed, because it is still a real
+            # deviation from the training distribution and belongs in any reported number.
+            log.warning(
+                f"Only one exterior camera ({exo_camera_key_0}) found in obs; duplicating it "
+                f"into both Cosmos exterior slots. Expected on Open-v1/Close-v1/Pick-v1.5; "
+                f"on any bench-v2 task it means the second view is missing -- see "
+                f"docs/eval_reproduction.md."
+            )
+
+        exterior_image_0 = _lanczos_resize(obs[exo_camera_key_0], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
+        exterior_image_1 = _lanczos_resize(obs[exo_camera_key_1], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
         wrist_image = _lanczos_resize(obs[wrist_camera_key], _WRIST_HEIGHT, _WRIST_WIDTH)
 
         model_input = {
-            "observation/exterior_image_1_left": exterior_image,
-            "observation/exterior_image_2_left": exterior_image,
+            "observation/exterior_image_1_left": exterior_image_0,
+            "observation/exterior_image_2_left": exterior_image_1,
             "observation/wrist_image_left": wrist_image,
             "observation/joint_position": np.array(
                 obs["qpos"]["arm"][:7], dtype=np.float32
