@@ -159,6 +159,33 @@ class JsonEvalRunner(ParallelRolloutRunner):
             exp_config.task_sampler_config.house_inds = sorted(self._episodes_by_house.keys())
             max_episodes = max(len(eps) for eps in self._episodes_by_house.values())
             exp_config.task_sampler_config.samples_per_house = max_episodes
+            # ONE work item per house, and this is load-bearing rather than a tuning choice.
+            #
+            # pipeline.py splits each house into round(samples_per_house / episodes_per_batch)
+            # work items, intending them to PARTITION the house's episodes. On the JSON eval
+            # path they do not: get_max_episode_attempts() below returns len(episode_specs) --
+            # every episode of the house -- and load_episodes_for_house() hands back the whole
+            # house, so each work item re-runs the house in full. N batches means N copies.
+            #
+            # It stayed invisible because it depends on episodes-per-house. bench-v2 has 1-2
+            # episodes per house, so total_batches rounds to 1 and the result is correct --
+            # Pick-v2-classic returned exactly n=1000. bench-v1 has ~34 per house, giving 8
+            # batches and an 8x oversample: a partial Open-v1 run measured 4236 episodes
+            # against a 1000-episode benchmark, and house_13 produced 272 trajectories where
+            # the benchmark lists 34.
+            #
+            # That is fatal for leaderboard comparison, and in the same way the reference
+            # campaign's --max_episodes runs were: the extra episodes are repeat draws from a
+            # handful of houses, not independent trials, so the rate is category-skewed and the
+            # interval is far too narrow. Those runs were quarantined for it; these would be
+            # too. Note the reference never completed a full-coverage bench-v1 cell, which is
+            # why this survived -- Open-v1/Close-v1 were only ever run with --max_episodes.
+            #
+            # Forcing episodes_per_batch to samples_per_house makes total_batches exactly 1, so
+            # each house is evaluated once, over precisely its own episode list. bench-v2 is
+            # unaffected (it already rounded to 1). Parallelism is unchanged in practice: work
+            # is distributed across houses, and there are 41 of them for 4 workers.
+            exp_config.task_sampler_config.episodes_per_batch = max_episodes
         exp_config.benchmark_path = self.benchmark_dir
 
         super().__init__(exp_config)

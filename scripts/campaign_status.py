@@ -28,6 +28,7 @@ import argparse
 import csv
 import json
 import sys
+import re
 import time
 from pathlib import Path
 
@@ -39,6 +40,8 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # Tasks whose per-episode cost is high enough that a long quiet stretch is normal.
 SLOW_TASKS = {"PnP-v2", "PnP-NextTo-v2", "PnP-Color-v2", "Pick-v2-filament", "Pick-v2-RandCam"}
 SLOW_STALL_MINUTES = 180
+
+_BATCHED = re.compile(r"Batched (\\d+) episodes in")
 
 MARK = {"done": "OK", "running": "..", "stalled": "!!", "pending": "--"}
 
@@ -65,10 +68,24 @@ def cell_state(d: Path, task: str, stall_minutes: float) -> tuple[str, str]:
             return "done", ""
     log = d / "eval_stdout.log"
     if log.exists():
+        # Progress for an in-flight cell comes from pipeline.py's own
+        # "Batched N episodes in ..." line, emitted once per completed house with the exact
+        # episode count. Earlier versions of this tool counted distinct "house H episode E"
+        # markers instead, which undercounts badly -- it reported 34 episodes for a cell whose
+        # own summary said 79, and produced a 2115 s/episode rate for a cell actually running
+        # at ~218. Progress metrics that are wrong in the pessimistic direction are worse than
+        # no metric, because they trigger restarts of healthy work.
+        done = 0
+        try:
+            for m in _BATCHED.finditer(log.read_text(errors="ignore")):
+                done += int(m.group(1))
+        except Exception:
+            pass
         age_min = (time.time() - log.stat().st_mtime) / 60.0
+        prog = f"{done} ep done, " if done else ""
         limit = SLOW_STALL_MINUTES if task in SLOW_TASKS else stall_minutes
         state = "running" if age_min < limit else "stalled"
-        return state, f"{age_min:.0f}m quiet"
+        return state, f"{prog}{age_min:.0f}m quiet"
     return "pending", ""
 
 
