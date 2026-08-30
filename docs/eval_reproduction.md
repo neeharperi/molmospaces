@@ -1606,3 +1606,48 @@ Both bench-v2 Cosmos cells are quarantined under
 `runs/_INVALID_cosmos_exterior_dup_20260830/` with their before-numbers, and are being re-run.
 Bench-v1 Cosmos cells are **not** invalidated: there is one exterior camera there, so the old
 and new code paths are identical.
+
+### bench-v1 was evaluating 8x its episodes, and every Open-v1/Close-v1 cell was invalid
+
+Found while investigating why no cell had completed in 19 hours. `eval_to_csv` on a partial
+pi05 Open-v1 run reported **4236 episodes against a 1000-episode benchmark**, and `house_13`
+held **272 trajectories where `benchmark.json` lists 34** -- exactly 8x, across 8 batch files
+of 34 each.
+
+**Mechanism.** `pipeline.py` splits each house into
+`round(samples_per_house / episodes_per_batch)` work items, which are meant to *partition* that
+house's episodes. On the JSON eval path they do not:
+`JsonEvalRunner.load_episodes_for_house()` returns the whole house and
+`get_max_episode_attempts()` returns `len(episode_specs)`, so every work item re-runs the house
+in full. N batches, N identical passes.
+
+**Why it survived.** The multiplier is episodes-per-house, so bench-v2 never shows it: 1-2
+episodes per house rounds `total_batches` to 1, and Pick-v2-classic duly returned exactly
+n=1000. bench-v1 carries ~34 per house, giving 8 batches. And the reference campaign never
+completed a full-coverage bench-v1 cell -- Open-v1 and Close-v1 were only ever run with
+`--max_episodes` and quarantined for the *oversampling that flag causes* -- so this code path
+had no prior coverage. Two different mechanisms, the same symptom, and the first one masked the
+second.
+
+**Why it is fatal rather than merely wasteful.** The surplus episodes are repeat passes over a
+handful of houses, not independent trials, so the success rate is category-skewed and the
+Wilson interval is far too narrow -- precisely the reasoning that got the `--max_episodes` runs
+quarantined in campaign 1.
+
+**Fix**: `episodes_per_batch = samples_per_house` on the JSON eval path, making `total_batches`
+exactly 1 so each house is evaluated once over its own episode list. bench-v2 unaffected.
+Parallelism is unchanged in practice -- work spreads across houses, and bench-v1 has 41.
+
+**Verified** on houses of differing size, across two policies, which is what rules out a
+coincidence: `house_14` produced 22 against a benchmark 22, `house_15` produced 20 against 20,
+for both `pi05_droid` and `pi0_droid`. The rollout line now reads "41 houses split into 41 work
+items" where it read 328.
+
+All prior bench-v1 cells are quarantined to `runs/_INVALID_benchv1_oversample_20260830/`.
+
+**A note on measurement discipline.** This was found only because trajectory counts inside the
+h5 files were checked directly. Three cheaper progress proxies used earlier in this campaign
+were all wrong: counting `house N episode M` log markers undercounted so badly it implied
+2115 s/episode for a cell actually running at ~218, and counting "saved trajectory data for
+house_" lines reported 296 houses for a 41-house benchmark. Both errors pointed toward
+restarting healthy lanes. A progress metric that is wrong pessimistically is worse than none.
