@@ -1876,3 +1876,35 @@ Also note the policy slug for MolmoAct2 is now **`molmoact`**, not the `molmoact
 `reference/README.md` -- `molmoact2` returns the site's HTML shell. All four MolmoAct2 values in
 `reference/leaderboard_snapshot.csv` (11.7, 71.26, 20.5, 43.4) were re-verified against the live
 site under the working slug and are correct.
+
+### TiPToP scores 0.8% on Open-v1, and the planner is healthy while doing it
+
+`tiptop` / `Open-v1`: **0.80% (8/1000)**, 0 rollout errors. No leaderboard entry exists for this
+cell, so it is a data point rather than a verdict -- but the *reason* for the number is checkable
+and worth checking, because campaign 1 spent a whole matrix on a near-identical-looking result
+that was a bug.
+
+That earlier run scored ~0% because the M2T2 grasp server was never started: **6,486 of 6,486
+planning calls returned a well-formed `success=False`** with `ClientConnectorError` behind them,
+and nothing crashed. The distinguishing evidence here is the planner's own telemetry:
+
+| | campaign 1 (bug) | campaign 2 (this run) |
+|---|---|---|
+| M2T2 connection errors | 6,486 | **0** |
+| planning successes | 0 | **51 of the last 400 requests** |
+| dominant failure reason | `Cannot connect to host localhost:8123` | `All 1 plan skeleton(s) failed particle initialization` |
+
+The failures are now *planning-quality* failures -- particle initialisation, no satisfying
+particles, no supporting plane -- which is what a working TAMP solver looks like when the goal is
+outside what it can express. That independently confirms campaign 1's conclusion, reached from an
+8,582-request failure census: cuTAMP's goal language is `on(object, surface)` over movable
+objects and cannot state "open the drawer". The 0.80% here sits alongside campaign 1's post-fix
+Close-v1 of 0.99% (22/2216).
+
+It also explains the leaderboard's own shape. TiPToP is the one policy with **no** Open-v1 or
+Close-v1 entry -- campaign 1 confirmed those slugs return the site's HTML shell rather than a
+CSV. Upstream did not report these tasks either, which is consistent with the capability limit
+rather than with anyone's harness being wrong.
+
+Two of the 18 no-entry cells are exactly these, and this is why they were always going to be
+data points: there is nothing to verify against, and the number is a property of the planner.
