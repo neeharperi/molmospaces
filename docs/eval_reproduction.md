@@ -1908,3 +1908,37 @@ rather than with anyone's harness being wrong.
 
 Two of the 18 no-entry cells are exactly these, and this is why they were always going to be
 data points: there is nothing to verify against, and the number is a property of the planner.
+
+### MolmoAct2's "residual ~4pp Close-v1 gap" was an oversampling artifact
+
+`molmoact2_droid` / `Close-v1`: **73.28% (670/915)** against **71.26%** -- PASS, n=915 exact,
+0 rollout errors.
+
+Campaign 1 ended with this exact cell as a named open question. Its Close-v1 measured 66.77%
+(4006/6000) against 71.26% and it wrote: *"the MolmoAct2 Close-v1 number did improve
+substantially under the control-rate/chunk fix (54.29% -> 66.77%), so that fix is independently
+confirmed; what remains is whether the residual ~4pp gap survives a like-for-like episode set."*
+
+It does not. On the benchmark's own 915 episodes the number is 73.28% -- **above** the
+leaderboard, comfortably passing. The ~4pp shortfall was produced by the measurement, not the
+policy:
+
+| | episode set | result | vs 71.26% |
+|---|---|---|---|
+| campaign 1 | n=6000, clustered resamples from 27 houses | 66.77% | -4.5pp, unresolved |
+| campaign 2 | n=915, the benchmark's own set | **73.28%** | +2.0pp, **PASS** |
+
+A 6.5pp swing from fixing the episode set alone. That is the clearest single demonstration of
+why both oversampling mechanisms had to go: the distortion is large enough to turn a pass into a
+failure and send someone hunting for a policy bug that was never there.
+
+**It also settles the MolmoAct2 bench-v1 question raised by its Open-v1 FAIL.** There is no
+general bench-v1 shortfall -- Close-v1 passes on the same benchmark family, same camera rig
+(`FrankaDroidCameraSystem`, single exterior), same wrapper, same night. MolmoAct2 now stands at
+2 PASS (Pick-v2-classic, Close-v1) and 1 FAIL (Open-v1), so **Open-v1 is an isolated cell, not a
+pattern**, and any explanation must be specific to that task rather than to bench-v1 or to the
+integration.
+
+Worth noting what did NOT change between campaigns for this policy: the control rate
+(`policy_dt_ms=66.0`) and the split of `num_steps` from `action_horizon=15`. Campaign 1's fixes
+were right; only the episode set was wrong.
