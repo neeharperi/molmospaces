@@ -1971,3 +1971,48 @@ properly with McNemar over the paired outcomes and got p=0.098 -- not significan
 1000 episodes flipping. The same caution applies to our pair: they are paired samples, so the
 unpaired two-proportion test is the wrong instrument, and the honest summary is "same ballpark,
 large per-episode churn", not "filament is better".
+
+### CORRECTION: the camera bug was real, but it does not explain the Cosmos shortfall
+
+`cosmos_edge` / `Open-v1`: **8.30% (83/1000)** vs **32.00%** -- FAIL, another ~4x miss, n=1000,
+0 rollout errors.
+
+**This forces a correction to the earlier entry.** When `cosmos_edge` (8.20%) and `cosmos_nano`
+(9.80%) both missed Pick-v2-classic against 32.30%, the exterior-camera duplication bug was
+found and recorded as the cause. Open-v1 shows that reading was wrong, or at least incomplete:
+
+- Open-v1 is a `FrankaDroidCameraSystem` benchmark with **one** exterior camera. Duplicating it
+  into both slots is correct and unavoidable there -- 54,390 fallback warnings in this cell
+  confirm the wrapper took exactly that path.
+- So this cell contains **none** of the bug, and still misses by the same ~4x.
+
+The duplication was a genuine defect and the fix stands -- it discarded a real viewpoint on all
+seven bench-v2 tasks. But it is not the explanation for Cosmos's numbers, and saying it was
+outran the evidence. The bench-v2 re-runs will show whether it accounts for *any* of the gap.
+
+**What is now known:**
+
+| cell | ours | leaderboard | camera bug present? |
+|---|---|---|---|
+| Pick-v2-classic (edge) | 8.20% | 32.30% | yes |
+| Pick-v2-classic (nano) | 9.80% | 32.30% | yes |
+| Open-v1 (edge) | 8.30% | 32.00% | **no** |
+
+A consistent ~4x shortfall independent of the bug, across both checkpoints and both benchmark
+families.
+
+**One lead, offered as a lead and not a conclusion.** The Cosmos rows' `# run_path` is
+`/tmp/cosmos3_csv/ms_open` -- a scratch directory, where every other policy's rows point at a
+real evaluation output tree (`/weka/.../eval_output/...`, `/home/orayyan/.../eval_output/...`).
+That is consistent with the Cosmos numbers having been imported from elsewhere rather than
+produced by running the policy through this harness, which would make them not directly
+comparable. It is also consistent with nothing in particular; a scratch path is weak evidence
+on its own, and campaign 1 already recorded that these rows are ambiguous in another way (one
+`cosmos` row for two checkpoints).
+
+**Still unexplained, and the strongest candidate for a real integration defect in this
+campaign.** The two knobs campaign 1 explicitly flagged as guessed rather than verified remain
+unaudited: `policy_dt_ms=66.0` (chosen from the server's own `fps=15.0`, while the leaderboard
+CSVs carry a meaningless `# dt: 0.1`) and `chunk_size=8` against the server's own
+`action_chunk_size` default of 32. MolmoAct2's largest bug was precisely a wrong control rate,
+costing about half its score, so that class of error is known to be live here.
