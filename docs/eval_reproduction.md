@@ -2084,3 +2084,50 @@ the four whose leaderboard rows carry `sim_cotraining_output` provenance, and bo
 rows come from a plain eval tree (Open-v1, Close-v1) PASS. For the harness to be at fault it
 would have to be wrong only on the co-trained rows, wrong identically on two machines, and wrong
 in the direction that raises scores.
+
+### Cosmos: hypotheses ruled out so far, and the cell that will discriminate
+
+`cosmos_edge` / `Close-v1`: **55.52% (508/915)** vs **79.13%** -- FAIL. Both bench-v1 cells now
+miss, and the cross-policy comparison is what makes this hard to dismiss:
+
+| task | pi05 | MolmoAct2 | pi0 | **cosmos_edge** | leaderboard says cosmos |
+|---|---|---|---|---|---|
+| Open-v1 | 20.7% | 8.8% | 9.8% | **8.3%** | **32.0%** (best of all) |
+| Close-v1 | 67.2% | 73.3% | 54.6% | **55.5%** | **79.13%** (best of all) |
+
+Our Cosmos performs like the weakest policy in the field on both cells, where the leaderboard
+puts it first. That is an 18-cell problem (two checkpoints x nine tasks), so it is worth real
+diagnostic effort rather than a shrug.
+
+**Ruled out by inspection:**
+
+- **Autoregressive desync.** This was DreamZero's most expensive bug, and Cosmos3 is also a
+  video model, so it was the first suspect. It does not apply: `RobolabPolicyService.infer()`
+  is stateless -- no history buffer, cache or context carried between calls -- so re-querying
+  every 8 steps against a 32-step chunk cannot desync anything.
+- **Observation contract.** The server's `_build_sample` needs `history_length - use_state_rows`
+  extra joint_position rows; at the running config (`history=1`, `use_state=True`) that is zero,
+  so a single frame is correct. A shortfall would raise `Not enough joint_position rows`, which
+  never appears.
+- **Config drift.** The server's own startup line reports exactly upstream's documented
+  defaults: `action_space=joint_pos action_dim=8 chunk=32 history=1 use_state=True
+  image=540x640 fps=15.0 guidance=3.0 guidance_interval=(960.0, 1001.0) num_steps=4 shift=5.0`.
+  The `image=540x640` also confirms the wrapper's canvas geometry (640x360 wrist + two 320x180
+  exteriors = 640x540) is what the server expects.
+- **The exterior-camera duplication.** Already retracted as the cause -- both bench-v1 cells
+  lack the bug entirely and miss anyway.
+
+**Still open**: `policy_dt_ms=66.0` and client `chunk_size=8`, the two knobs campaign 1 flagged
+as guessed. Both remain plausible; neither is yet evidenced.
+
+**The discriminating cell is already running.** `cosmos_edge` / `Pick-v1.5` is the one cell
+where campaign 1 has a directly comparable observation: its 3-episode handshake scored 2/3
+(66.7%) against the leaderboard's 66.5%, which it called "the strongest possible signal this
+integration is correct". At n=3 that is nearly meaningless statistically, but at n=1000 the same
+cell becomes decisive:
+
+- **~66%** -> Cosmos works on pick tasks and the shortfall is task-specific, which would point
+  somewhere quite different from a control-rate or chunking error.
+- **~8%** -> the integration is broadly wrong, and the two remaining knobs become the priority.
+
+Holding the diagnosis until it lands. Guessing early is what produced the retraction above.
