@@ -2131,3 +2131,35 @@ cell becomes decisive:
 - **~8%** -> the integration is broadly wrong, and the two remaining knobs become the priority.
 
 Holding the diagnosis until it lands. Guessing early is what produced the retraction above.
+
+### CORRECTION: MolmoAct2 has no systematic downward bias
+
+`molmoact2_droid` / `Pick-v2-filament`: **23.50% (235/1000)** vs **21.90%** -- PASS, and *above*
+the leaderboard. Five cells in, the "mild systematic downward bias" recorded two entries ago
+does not hold:
+
+| task | ours | leaderboard | delta | verdict |
+|---|---|---|---|---|
+| Pick-v1.5 | 37.84% | 43.40% | **-5.6pp** | FAIL |
+| Open-v1 | 8.81% | 11.70% | -2.9pp | FAIL |
+| Pick-v2-classic | 18.12% | 20.50% | -2.4pp | PASS |
+| Pick-v2-filament | 23.50% | 21.90% | **+1.6pp** | PASS |
+| Close-v1 | 73.28% | 71.26% | **+2.1pp** | PASS |
+
+Mean delta **-1.43pp** across five cells, with two positive. That is ordinary cell-to-cell
+scatter around the published numbers, not a bias -- 3 of 5 PASS, and the honest summary is
+"tracks its leaderboard entries, with one clear outlier at Pick-v1.5 (-5.6pp) and one moderate
+miss at Open-v1".
+
+**A note on my own method, because this is the third premature pattern in this document.** In
+order: the Cosmos exterior-camera bug was recorded as the cause of the Cosmos shortfall
+(retracted -- bench-v1 lacks the bug and misses anyway); MolmoAct2's Open-v1 miss was called
+"an isolated cell, not a pattern" (retracted at two cells); and then the opposite, "a mild
+systematic downward bias" (retracted here at five). Each was drawn from two or three cells.
+
+The rule that would have prevented all three: **with 63 cells arriving over weeks, a pattern
+claim needs more than the two or three cells that happen to have landed.** Report the cell,
+report the delta, and let the pattern accumulate. The Cosmos investigation above is deliberately
+written the other way -- hypotheses listed, three ruled out by inspection, and the diagnosis
+explicitly deferred to a cell that has not finished -- which is the shape the rest of this
+document should follow.
