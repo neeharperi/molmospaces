@@ -2016,3 +2016,43 @@ unaudited: `policy_dt_ms=66.0` (chosen from the server's own `fps=15.0`, while t
 CSVs carry a meaningless `# dt: 0.1`) and `chunk_size=8` against the server's own
 `action_chunk_size` default of 32. MolmoAct2's largest bug was precisely a wrong control rate,
 costing about half its score, so that class of error is known to be live here.
+
+### MolmoAct2 shows a mild systematic downward bias, not an isolated cell
+
+`molmoact2_droid` / `Pick-v1.5`: **37.84% (378/999)** vs **43.40%** -- FAIL. That makes two
+downward misses, so the earlier characterisation of Open-v1 as "an isolated cell, not a pattern"
+was premature. With four cells done the shape is:
+
+| task | family | ours | leaderboard | delta | verdict |
+|---|---|---|---|---|---|
+| Close-v1 | bench-v1 | 73.28% | 71.26% | **+2.1pp** | PASS |
+| Pick-v2-classic | bench-v2 | 18.12% | 20.50% | -2.4pp | PASS |
+| Open-v1 | bench-v1 | 8.81% | 11.70% | -2.9pp | FAIL |
+| Pick-v1.5 | bench-v2 | 37.84% | 43.40% | **-5.6pp** | FAIL |
+
+Three of four deltas are negative, averaging about -2.2pp, and the two that cross into FAIL are
+simply the two largest. Note this does **not** split by benchmark family -- each family has one
+PASS and one FAIL -- so the bench-v1-specific hypothesis raised by Open-v1 is dead, killed by
+Close-v1 passing and Pick-v1.5 failing.
+
+Scale matters for triage: this is a few points, not the ~4x Cosmos gap. It is the size of a
+mildly suboptimal setting rather than a broken data path, and a policy that reproduces two of
+its four cells cannot be badly mis-wired.
+
+**One lead, held loosely.** All four MolmoAct2 leaderboard rows share the run_path
+`/weka/oe-training-default/hqfang/molmospaces/eval_output/molmoact2-0411-droid-posttrain_v2-**discrete_states**-setup`.
+That names a specific post-training variant, and we evaluate the public
+`allenai/MolmoAct2-DROID`. A small uniform offset is what evaluating a sibling checkpoint would
+look like. This is offered as a hypothesis to test, not a conclusion -- the Cosmos entry above
+is a fresh reminder of what happens when a plausible cause is adopted early. Testing it needs
+either confirmation of which checkpoint produced those rows, or the remaining five MolmoAct2
+cells showing the same small negative offset.
+
+### TiPToP Close-v1: 0.55%, consistent with the articulated-task limit
+
+`tiptop` / `Close-v1`: **0.55% (5/915)**, 0 rollout errors, **0 M2T2 connection errors**. No
+leaderboard entry, so a data point. It sits beside its Open-v1 0.80% and campaign 1's post-fix
+0.99%, all three measured with the grasp server demonstrably healthy -- the same planner that
+returns real successes on pick tasks simply cannot express an articulated-joint goal in cuTAMP's
+`on(object, surface)` language. Both of TiPToP's bench-v1 cells are now done and both are
+data points by construction: upstream never reported them either.
