@@ -1942,3 +1942,32 @@ integration.
 Worth noting what did NOT change between campaigns for this policy: the control rate
 (`policy_dt_ms=66.0`) and the split of `num_steps` from `action_horizon=15`. Campaign 1's fixes
 were right; only the episode set was wrong.
+
+### Three for three: every pi05 Group B cell reproduces across machines and misses upward
+
+`pi05_droid` / `Pick-v2-filament`: **11.30% (113/1000)** vs **7.01%** -- FAIL, upward, and
+indistinguishable from the reference machine's 10.70% (z = -0.43).
+
+| cell | reference machine | this machine | z | vs leaderboard |
+|---|---|---|---|---|
+| Pick-v1.5 | 23.70% (237/1000) | 23.30% (233/1000) | 0.21 | +5.3pp |
+| Pick-v2-classic | 8.70% (87/1000) | 8.00% (80/1000) | 0.57 | +1.6pp |
+| Pick-v2-filament | 10.70% (107/1000) | 11.30% (113/1000) | -0.43 | +4.3pp |
+
+Three independent cells, two independent machines, |z| < 0.6 on every pairing, and every one
+above the published number. Meanwhile pi05's two Group A cells -- the rows the leaderboard
+attributes to a plain eval rather than to `sim_cotraining_output` -- both PASS.
+
+This is now about as clean as observational evidence gets for the conclusion already drawn from
+the `# run_path` headers: the checkpoint behind the leaderboard's pi05 Group B rows is not
+`pi05_droid_jointpos`. A harness fault would have to reproduce itself bit-for-bit across two
+different GPU architectures, drivers and rendering stacks, spare Group A entirely, and inflate
+rather than depress scores.
+
+**Filament vs classic on the same benchmark JSON**, which campaign 1 flagged as a cross-check
+worth repeating: 8.00% classic vs 11.30% filament here, against its own 8.70% vs 10.70%. Both
+machines put filament a few points above classic on identical episodes. Campaign 1 tested this
+properly with McNemar over the paired outcomes and got p=0.098 -- not significant despite 146 of
+1000 episodes flipping. The same caution applies to our pair: they are paired samples, so the
+unpaired two-proportion test is the wrong instrument, and the honest summary is "same ballpark,
+large per-episode churn", not "filament is better".
