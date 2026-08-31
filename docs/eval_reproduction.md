@@ -2163,3 +2163,50 @@ report the delta, and let the pattern accumulate. The Cosmos investigation above
 written the other way -- hypotheses listed, three ruled out by inspection, and the diagnosis
 explicitly deferred to a cell that has not finished -- which is the shape the rest of this
 document should follow.
+
+## TiPToP's Gemini model was retired mid-campaign, and 57.5% of its planning failed
+
+`tiptop` / `Pick-v1.5` came in at **41.90% (419/1000)** against a leaderboard **67.50%**. The
+cell was clean by every check this project had: 0 rollout errors, 0 M2T2 connection errors, the
+grasp server healthy. The planner's own telemetry is what exposed it:
+
+    404 NOT_FOUND. models/gemini-robotics-er-1.6-preview is not found for API version
+    v1beta, or is not supported for generateContent.
+
+**57.5% of planning requests were failing at the perception step.** TiPToP grounds objects with
+Gemini, and `tiptop/perception/gemini.py` hardcodes `gemini-robotics-er-1.6-preview` as a
+default in two function signatures. That model stopped resolving **on 2026-08-31 at 01:23
+local, mid-campaign** -- the first 404 in 3,629 planning directories.
+
+This is campaign 1's M2T2 outage in a new costume, and the resemblance is worth stating: a
+dependent service returning **well-formed failures** that read as poor policy performance
+rather than as an outage. Campaign 1 lost a whole TiPToP matrix to the M2T2 version and wrote
+that the lesson was to "verify a dependent service's actual success rate, not just that an
+action stream came back well-formed". That check is exactly what caught this one -- the M2T2
+counter was clean, so the planning-outcome census had to be read too.
+
+It also has a failure mode M2T2 did not: **a hardcoded preview model id can be withdrawn by a
+third party without notice, mid-run.** Nothing in this repo changed. Campaign 1 measured 64.0%
+on this same cell on 2026-08-18, when the model still existed.
+
+**Scoping, from the 404 timestamps:**
+
+| cell | finished | affected |
+|---|---|---|
+| Open-v1 | 08-30 17:05 | no -- before the first 404 |
+| Close-v1 | 08-31 00:15 | no -- before the first 404 |
+| Pick-v1.5 | 08-31 16:36 | **yes** |
+
+Only Pick-v1.5 is quarantined (`runs/_INVALID_tiptop_gemini404_20260831/`). The two bench-v1
+cells predate the outage and their censuses show planning-quality failures only, so their 0.80%
+and 0.55% stand -- and they were data points regardless, TiPToP having no leaderboard entry
+there.
+
+**Fix**: `scripts/tiptop_patches/0002-gemini-robotics-er-2.patch` moves both defaults to
+`gemini-robotics-er-2-preview`, the successor present in the account's model list, verified
+with a live `generateContent` call before applying. After restart: **4 of 4 planning requests
+succeed, zero 404s**. Pick-v1.5 is re-running.
+
+**Worth doing if TiPToP runs again**: a startup health check on the Gemini model, the way
+`serve_m2t2.sh` exists because M2T2's absence was invisible. An external dependency that can
+disappear between runs deserves the same treatment as one that can fail to start.
