@@ -2056,3 +2056,31 @@ leaderboard entry, so a data point. It sits beside its Open-v1 0.80% and campaig
 returns real successes on pick tasks simply cannot express an articulated-joint goal in cuTAMP's
 `on(object, surface)` language. Both of TiPToP's bench-v1 cells are now done and both are
 data points by construction: upstream never reported them either.
+
+### Every full-coverage cell campaign 1 completed has now been independently reproduced
+
+`pi05_droid` / `Pick-v2-RandCam`: **11.80% (118/1000)** vs **7.96%** -- FAIL upward, z = 0.41
+against the reference machine's 12.40%.
+
+Campaign 1 finished exactly four full-coverage cells before it stopped, all `pi05_droid` Group B.
+Campaign 2 has now run all four on different hardware, and every one agrees:
+
+| cell | campaign 1 | campaign 2 | z | leaderboard | both vs lb |
+|---|---|---|---|---|---|
+| Pick-v1.5 | 23.70% | 23.30% | 0.21 | 18.05% | high |
+| Pick-v2-classic | 8.70% | 8.00% | 0.57 | 6.38% | high |
+| Pick-v2-filament | 10.70% | 11.30% | -0.43 | 7.01% | high |
+| Pick-v2-RandCam | 12.40% | 11.80% | 0.41 | 7.96% | high |
+
+**4 of 4, every |z| < 0.6.** Different GPU architecture (sm_120 vs sm_90), different driver,
+a rendering stack assembled by hand from unpacked driver packages, a CUDA forward-compatibility
+shim, freshly built environments, and two harness bugs fixed in between -- and the numbers do
+not move. Package-list parity against `robot-prompt-opt` was unavailable on this machine and is
+recorded as unverifiable in `docs/env_parity.md`; this is the behavioural check that
+document argues is worth more, and it is satisfied four times over.
+
+It also sharpens the pi05 conclusion one last time. The four cells that reproduce are exactly
+the four whose leaderboard rows carry `sim_cotraining_output` provenance, and both cells whose
+rows come from a plain eval tree (Open-v1, Close-v1) PASS. For the harness to be at fault it
+would have to be wrong only on the co-trained rows, wrong identically on two machines, and wrong
+in the direction that raises scores.
