@@ -2490,3 +2490,28 @@ existed by then.
   second frame that may not show the robot. It cannot be measured against a leaderboard entry --
   DreamZero has none for Group B -- so an A/B against the duplicating variant is the only way to
   settle it.
+
+### Scoping the camera revert: only SIX of the nine tasks were ever affected
+
+The exterior-camera change is a no-op on any benchmark that exposes a single exterior camera,
+because both code paths then duplicate it. From the observation dump:
+
+| task | cameras | affected by the change |
+|---|---|---|
+| Open-v1, Close-v1, **Pick-v1.5** | `exo_camera_1`, `wrist_camera` | **no** |
+| Pick-v2-classic/filament/RandCam, PnP-v2/NextTo/Color | `..._zed2_analogue_1`, `_2`, + others | yes |
+
+Note **Pick-v1.5 is in the unaffected group** despite being a bench-v2 task -- it uses the
+`FrankaDroidCameraSystem` rig, not the zed2 one. So among completed Cosmos cells only
+`cosmos_edge/Pick-v2-classic` was ever affected, and it has been re-measured and reverted.
+`Open-v1`, `Close-v1` and `Pick-v1.5` for both checkpoints stand as recorded.
+
+**A second mistake, from not checking this first.** On finding two in-flight processes that had
+started before the revert, both were killed: the `cosmos_edge/Pick-v2-filament` cell (correctly
+-- it is a zed2 task) and the powered chunk A/B at 253/300 episodes (**incorrectly** -- it runs
+on Pick-v1.5, where the camera path is identical either way). Eleven hours of valid work
+discarded because the scope of the revert was assumed rather than checked, immediately after
+writing up a retraction about exactly that habit. The A/B has been restarted from zero.
+
+The check that would have prevented it is the one already run at campaign start:
+`runs/_debug/<task>/` lists every camera each benchmark exposes.
