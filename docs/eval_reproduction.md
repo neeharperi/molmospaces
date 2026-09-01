@@ -2515,3 +2515,43 @@ writing up a retraction about exactly that habit. The A/B has been restarted fro
 
 The check that would have prevented it is the one already run at campaign start:
 `runs/_debug/<task>/` lists every camera each benchmark exposes.
+
+### Chunk-size audit: no significant effect, and chunk=8 is retained
+
+Powered A/B, n=300/arm on identical Pick-v1.5 episodes (dedicated server, seed 42):
+
+| arm | chunk | n=60 round | n=300 round |
+|---|---|---|---|
+| A | 8 (current) | 33.33% | **34.33%** (103/300) |
+| B | 32 (server default) | 41.67% | **38.00%** (114/300) |
+| | effect | +8.3pp (z=-0.94) | **+3.7pp (z=+0.93)** |
+
+**The effect halved as power went up** -- the textbook signature of a small-sample estimate
+inflated by noise, and a reminder that the n=60 round's +8.3pp should never have been read as
+more than a hint. Reaching 80% power on the surviving 3.7pp effect would need ~n=1,300 per arm,
+about 47 GPU-hours for the pair. Not worth it: the setting cannot change a verdict, since even
+the better arm sits ~28pp below the leaderboard's 66.5%.
+
+**Decision: keep `chunk_size=8`.** The argument for 32 is that it is the server's own default;
+the argument against changing now is stronger. Switching mid-campaign would leave some Cosmos
+cells at 8 and some at 32, and an inconsistent configuration across cells is worse than a
+consistently suboptimal one -- particularly for the pooled MolmoBot Combined aggregate, which
+sums seven cells that would no longer share a config. Five completed Cosmos cells would also
+need re-running for a change measured at +3.7pp, n.s.
+
+**A measurement-stability result worth keeping.** The chunk=8 arm returns the same answer at
+every sample size tried:
+
+| sample | chunk=8 result |
+|---|---|
+| n=60 | 33.33% |
+| n=300 | 34.33% |
+| n=1000 (the campaign cell) | 33.80% |
+
+Three independent draws within 1pp. The harness is stable and the subsets are representative --
+which is what licenses using small A/B arms to test configuration questions at all.
+
+**Audit conclusion.** Both knobs campaign 1 flagged as guessed are now settled: `dt=66.0` is
+correct (server `fps=15.0`, and dt=100 measured 6.7pp worse), and `chunk_size` has no
+significant effect either way. **Neither explains the Cosmos gap**, which remains the campaign's
+one unexplained result.
