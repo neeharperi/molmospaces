@@ -2309,3 +2309,42 @@ occasional connection drops under 4-worker concurrency against a server with a C
 -- MolmoAct2 is the only policy speaking HTTP rather than a websocket. Rate is 9 in ~6,000
 episodes (0.15%), capped at 3 in any one cell, and already reflected in the recorded n (999,
 998). Below the level that moves a verdict.
+
+### Audit result: neither knob explains the Cosmos gap
+
+A/B on identical episodes (Pick-v1.5, `--max_episodes 60`, seed 42 hardcoded, dedicated server
+on `:8005`):
+
+| arm | chunk | dt | oracle | vs A |
+|---|---|---|---|---|
+| A (current) | 8 | 66.0 | **33.33%** (20/60) | -- |
+| B | **32** (server default) | 66.0 | **41.67%** (25/60) | +8.3pp |
+| C | 8 | **100.0** | **26.67%** (16/60) | -6.7pp |
+
+**No pair is statistically distinguishable at n=60** -- all |z| < 1.96. At this sample size the
+power to detect the observed 8.3pp effect is only ~16%, so "not significant" here means
+"underpowered", not "no effect".
+
+Two things it does establish:
+
+1. **Arm A reproduces the full-coverage baseline**: 33.33% at n=60 against 33.80% at n=1000.
+   The 60-episode subset is representative and the harness is stable across sample sizes.
+2. **dt=100 is worse, not better** (-6.7pp), which agrees with the server's own `fps=15.0`.
+   Combined with campaign 1's finding that the leaderboard's `# dt: 0.1` is an echoed argparse
+   default carrying no information, **the control rate question is closed: 66.0ms is right.**
+
+**Neither knob closes the gap.** The best arm reaches 41.67% against a leaderboard 66.50%. Even
+granting chunk=32 the full +8.3pp, roughly 25pp remains unexplained.
+
+A higher-powered run (n=300/arm, A vs B only) is underway to settle chunk size on its own
+merits -- 32 is the server's own default and 8 was copied from pi0.5 with no Cosmos-specific
+justification, so getting it right matters for how the 18 Cosmos cells are reported even though
+it will not produce a PASS. Note n=300 gives ~57% power at an 8.3pp effect, not the 80% a
+first pass at the arithmetic suggested; 80% would need ~550/arm and about 10 hours per arm.
+
+### cosmos_nano's first verdict agrees with cosmos_edge
+
+`cosmos_nano` / `Open-v1`: **6.91% (69/999)** vs **32.00%** -- FAIL, ratio 0.22, against
+`cosmos_edge`'s 0.26 on the same cell. Two different checkpoints (4B and 16B), same wrapper,
+same shortfall. That is consistent with either remaining explanation -- a shared wrapper defect,
+or a leaderboard row that was not produced by this harness -- and does not separate them.
