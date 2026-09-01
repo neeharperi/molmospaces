@@ -2210,3 +2210,42 @@ succeed, zero 404s**. Pick-v1.5 is re-running.
 **Worth doing if TiPToP runs again**: a startup health check on the Gemini model, the way
 `serve_m2t2.sh` exists because M2T2's absence was invisible. An external dependency that can
 disappear between runs deserves the same treatment as one that can fail to start.
+
+### The Cosmos discriminating cell returned a third answer
+
+`cosmos_edge` / `Pick-v1.5`: **33.80% (338/1000)** vs **66.50%** -- FAIL, 0 rollout errors.
+
+The prediction stated above was that this cell would separate two hypotheses: ~66% meaning
+"works on pick tasks, shortfall is task-specific", ~8% meaning "broadly wrong". It returned
+neither. Ratios to the leaderboard across the three completed cells:
+
+| cell | ours | leaderboard | ratio |
+|---|---|---|---|
+| Open-v1 | 8.30% | 32.00% | 0.26 |
+| Pick-v1.5 | 33.80% | 66.50% | 0.51 |
+| Close-v1 | 55.52% | 79.13% | 0.70 |
+
+**What this rules out.** Cosmos is not broken in the sense the earlier cells suggested. 33.80%
+on Pick-v1.5 is the second-best score any policy has posted here on that task -- above pi05
+(23.30%) and near MolmoAct2 (37.84%). A wrapper that dropped observations, mangled actions or
+desynced state would not place second in the field. The varying ratio (0.26 / 0.51 / 0.70) also
+argues against a single systematic transform error, which would tend toward a constant factor
+or toward zero.
+
+**What remains.** The two knobs campaign 1 flagged as guessed -- `policy_dt_ms=66.0` and
+`chunk_size=8` against the server's own default of 32 -- are still unaudited and still
+plausible; a suboptimal control rate degrades gracefully rather than catastrophically, which
+fits a varying ratio better than it fits a constant one.
+
+**And the comparison itself is now more suspect than it was.** Cosmos is the top-scoring policy
+on *every one* of the leaderboard's nine tasks, and its rows are the only ones whose `# run_path`
+is a scratch directory (`/tmp/cosmos3_csv/<task>`) rather than an evaluation output tree. Every
+other policy points at `/weka/.../eval_output/...` or `/home/orayyan/.../eval_output/...`.
+Campaign 1 separately recorded that these rows are ambiguous in another way: one `cosmos` row
+covers two checkpoints, and it duplicated that row under both names precisely so the ambiguity
+would surface rather than silently match neither.
+
+Both explanations remain open, and they are not exclusive. Deliberately not choosing between
+them here: the last time a plausible cause was adopted early in this document it had to be
+retracted, and the honest position is that Cosmos underperforms its published numbers by a
+varying factor for reasons not yet established.
