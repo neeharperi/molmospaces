@@ -2528,8 +2528,8 @@ Powered A/B, n=300/arm on identical Pick-v1.5 episodes (dedicated server, seed 4
 
 **The effect halved as power went up** -- the textbook signature of a small-sample estimate
 inflated by noise, and a reminder that the n=60 round's +8.3pp should never have been read as
-more than a hint. Reaching 80% power on the surviving 3.7pp effect would need ~n=1,300 per arm,
-about 47 GPU-hours for the pair. Not worth it: the setting cannot change a verdict, since even
+more than a hint. Reaching 80% power on the surviving 3.7pp effect would need ~2,700 episodes per arm,
+about 97 GPU-hours for the pair. Not worth it: the setting cannot change a verdict, since even
 the better arm sits ~28pp below the leaderboard's 66.5%.
 
 **Decision: keep `chunk_size=8`.** The argument for 32 is that it is the server's own default;
