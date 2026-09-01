@@ -2406,3 +2406,38 @@ gets a leading underscore, and every tool that walks `runs/` skips them.
 
 Verified after the fix: `compare_to_leaderboard.py` reports 33.8% (1000) for that cell, and
 `check_provenance.py` validates 24 cells with the A/B arms excluded.
+
+### Two leaderboard cells are computed on a PARTIAL episode set, which weakens their verdicts
+
+`pi05_droid` / `PnP-v2`: **13.20% (132/1000)** vs **12.01%** -- PASS, and pi05's first Group B
+pass. Before reading much into it, the episode counts do not match:
+
+| task | benchmark | leaderboard n | leaderboard covers |
+|---|---|---|---|
+| Open-v1 | 1000 | 1000 | 100% |
+| Close-v1 | 915 | 915 | 100% |
+| Pick-v1.5 | 1000 | 997 | 100% |
+| Pick-v2-classic | 1000 | 987 | 99% |
+| PnP-Color-v2 | 1000 | 961 | 96% |
+| **PnP-v2** | 1000 | **541** | **54%** |
+| **PnP-NextTo-v2** | 1000 | **322** | **32%** |
+
+We evaluate the benchmark's full 1000; the published PnP-v2 number is from 541 episodes and
+PnP-NextTo-v2 from 322. This is the mirror image of the coverage problem campaign 1 documented:
+there, *our* truncated runs were not comparable to a full leaderboard; here the **leaderboard**
+is the truncated side.
+
+It matters for the same reason -- a partial episode set need not carry the benchmark's category
+mix, and campaign 1 measured that effect at several points on Open-v1. So:
+
+- **PnP-v2 PASS and any PnP-NextTo-v2 verdict are weaker evidence than the other cells**, and
+  should be labelled as such rather than counted as equals in the tally.
+- `scripts/category_mix_check.py` is the right instrument, and it works in this direction too:
+  it reweights the leaderboard's per-category rates by our episode counts. Worth running on
+  both cells once PnP-NextTo-v2 lands.
+- The pooled *MolmoBot Combined* comparison inherits this: the leaderboard's pi05 aggregate is
+  n=5597 against our 7000, and the shortfall is concentrated in these two tasks.
+
+Only pi05's rows were checked here -- `reference/README.md` records that the tiptop, molmoact2
+and cosmos blocks carry a substituted benchmark count (a uniform 1000/915/7000) rather than
+real per-file totals, so their nominal n cannot be used to detect the same issue.
