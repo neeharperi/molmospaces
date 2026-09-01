@@ -2441,3 +2441,52 @@ mix, and campaign 1 measured that effect at several points on Open-v1. So:
 Only pi05's rows were checked here -- `reference/README.md` records that the tiptop, molmoact2
 and cosmos blocks carry a substituted benchmark count (a uniform 1000/915/7000) rather than
 real per-file totals, so their nominal n cannot be used to detect the same issue.
+
+## RETRACTION: the Cosmos "camera bug" fix was a regression, and the original code was right
+
+The exterior-camera change made on 2026-08-30 has been reverted. Measured at full coverage on
+Pick-v2-classic:
+
+| configuration | result |
+|---|---|
+| duplicating the robot-facing view (original) | **8.20%** (82/1000) |
+| two distinct views (the "fix") | **5.20%** (52/1000) |
+
+**-3.0pp, z = -2.68, significant at n=1000/1000.** The change hurt.
+
+**Why the reasoning was wrong.** The argument was: the server composes a canvas whose bottom row
+is "two horizontally concatenated" exterior views, the checkpoint is DROID-trained where
+`exterior_image_1_left`/`_2_left` are two real exterior cameras, and `dreamzero_policy.py` had
+this exact bug fixed in campaign 1 -- so duplicating one view must be discarding information.
+Every step of that is true *about DROID*. None of it establishes that **this benchmark's** two
+zed2 cameras are the analogue of DROID's pair, and they are not:
+
+- `randomized_zed2_analogue_1` faces the robot and the workspace.
+- `randomized_zed2_analogue_2` is an **independently randomized** viewpoint that frequently
+  contains no arm at all -- in `runs/_debug/Pick-v2-classic/` it shows a sink from across the
+  room.
+
+Feeding a robot-less frame into a slot the model expects a workspace view in is worse than
+repeating the good one. The images were sitting in `runs/_debug/` the whole time, dumped by the
+observation-sanity check, and were never opened before making the change.
+
+**What this should have looked like.** The change was made on a code-reading argument and
+committed as a fix, with the measured 4x Cosmos gap offered as its motivation. The gap was
+never explained by it -- a later bench-v1 cell, which contains none of the "bug", missed by the
+same margin, and that already forced one correction. The honest sequence would have been:
+form the hypothesis, look at the two camera images (thirty seconds), and A/B it before
+committing. The A/B machinery built later for chunk/dt is exactly the right instrument and
+existed by then.
+
+**Consequences:**
+
+- Reverted; `runs/_INVALID_cosmos_twoview_regression_20260902/` holds the 5.20% run.
+- The 8.20% duplicating result is restored as the live Pick-v2-classic cell.
+- The earlier quarantine `_INVALID_cosmos_exterior_dup_20260830/` is misnamed -- those cells
+  were not invalid, they were correct. Their numbers are the ones now in use.
+- **Open question for `dreamzero_policy.py`**, which selects the same zed2 pair: campaign 1's
+  justification there is subject to the same objection. Its bench-v1 cells are unaffected (one
+  exterior camera exists, so it duplicates anyway) but its seven Group B cells feed DreamZero a
+  second frame that may not show the robot. It cannot be measured against a leaderboard entry --
+  DreamZero has none for Group B -- so an A/B against the duplicating variant is the only way to
+  settle it.

@@ -101,62 +101,45 @@ class Cosmos_Policy(InferencePolicy):
         prompt = self.task.get_task_description()
         grip = np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)
 
-        # TWO DISTINCT exterior views where the benchmark has them. This server composes a
-        # canvas whose bottom row is "two horizontally concatenated" exterior views (its own
-        # prompt text), and the checkpoint is DROID-trained, where exterior_image_1_left and
-        # exterior_image_2_left are the two ZED2 cameras. Sending the same frame twice throws
-        # away a whole viewpoint the model was trained to use.
+        # DUPLICATE the robot-facing exterior view into both of the server's exterior slots.
         #
-        # This code previously duplicated one exterior unconditionally, on the stated premise
-        # that "this benchmark exposes one exterior camera". That is true of the three
-        # FrankaDroidCameraSystem tasks (Open-v1, Close-v1, Pick-v1.5) and FALSE of all seven
-        # bench-v2 tasks, which expose randomized_zed2_analogue_1 AND _2. Measured cost of the
-        # bug on Pick-v2-classic: cosmos_edge 8.2% and cosmos_nano 9.8% against a leaderboard
-        # entry of 32.3%. Identical in kind to dreamzero_policy.py's bug #2, which was fixed
-        # there and missed here.
+        # This looks like the bug fixed in dreamzero_policy.py and it was "fixed" here the same
+        # way -- sending randomized_zed2_analogue_1 and _2 as two distinct views, on the
+        # reasoning that the server composes a two-view canvas and the checkpoint is
+        # DROID-trained, where exterior_image_1_left/_2_left are two real exterior cameras.
         #
-        # Selection mirrors dreamzero_policy.py exactly -- same benchmark, same DROID slot
-        # semantics -- so the two DROID video policies see the same views.
+        # Measured at full coverage on Pick-v2-classic, that change made things SIGNIFICANTLY
+        # WORSE: 8.20% (82/1000) duplicating -> 5.20% (52/1000) with two views, -3.0pp,
+        # z = -2.68. Reverted on the evidence.
+        #
+        # The reason is visible in runs/_debug/Pick-v2-classic/: these two cameras are NOT a
+        # DROID-style pair. `randomized_zed2_analogue_1` faces the robot and the workspace;
+        # `randomized_zed2_analogue_2` is an independently randomized viewpoint that frequently
+        # does not contain the arm at all. Feeding a robot-less frame into a slot the model
+        # expects a workspace view in is worse than repeating the good one.
+        #
+        # NOTE for dreamzero_policy.py, which selects the same zed2 pair: the reasoning that
+        # justified it there is subject to the same objection, and its Group B cells feed
+        # DreamZero a frame that may not show the robot. Untested there because DreamZero has
+        # no Group B leaderboard entry to measure against.
         if self.camera_names != ["exo_camera_1", "wrist_camera"]:
-            # Explicit --camera_names override (e.g. Pick-v2-RandCam). Honour slot 1 as given
-            # and pair it with the matching _2 when that exists.
-            exo_camera_key_0, wrist_camera_key = self.camera_names[0], self.camera_names[1]
-            exo_camera_key_1_fallback = (
-                exo_camera_key_0[:-1] + "2" if exo_camera_key_0.endswith("1") else exo_camera_key_0
-            )
+            exo_camera_key, wrist_camera_key = self.camera_names[0], self.camera_names[1]
         else:
-            if "randomized_zed2_analogue_1" in obs:
-                exo_camera_key_0, exo_camera_key_1_fallback = (
-                    "randomized_zed2_analogue_1",
-                    "randomized_zed2_analogue_2",
-                )
-            else:
-                exo_camera_key_0, exo_camera_key_1_fallback = "exo_camera_1", "exo_camera_2"
+            exo_camera_key = (
+                "droid_shoulder_light_randomization"
+                if "droid_shoulder_light_randomization" in obs
+                else "exo_camera_1"
+            )
             wrist_camera_key = (
                 "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
             )
 
-        exo_camera_key_1 = (
-            exo_camera_key_1_fallback if exo_camera_key_1_fallback in obs else exo_camera_key_0
-        )
-        if exo_camera_key_1 == exo_camera_key_0:
-            # Genuinely unavoidable on the FrankaDroidCameraSystem tasks -- there is no second
-            # view to send. Logged rather than silently absorbed, because it is still a real
-            # deviation from the training distribution and belongs in any reported number.
-            log.warning(
-                f"Only one exterior camera ({exo_camera_key_0}) found in obs; duplicating it "
-                f"into both Cosmos exterior slots. Expected on Open-v1/Close-v1/Pick-v1.5; "
-                f"on any bench-v2 task it means the second view is missing -- see "
-                f"docs/eval_reproduction.md."
-            )
-
-        exterior_image_0 = _lanczos_resize(obs[exo_camera_key_0], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
-        exterior_image_1 = _lanczos_resize(obs[exo_camera_key_1], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
+        exterior_image = _lanczos_resize(obs[exo_camera_key], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
         wrist_image = _lanczos_resize(obs[wrist_camera_key], _WRIST_HEIGHT, _WRIST_WIDTH)
 
         model_input = {
-            "observation/exterior_image_1_left": exterior_image_0,
-            "observation/exterior_image_2_left": exterior_image_1,
+            "observation/exterior_image_1_left": exterior_image,
+            "observation/exterior_image_2_left": exterior_image,
             "observation/wrist_image_left": wrist_image,
             "observation/joint_position": np.array(
                 obs["qpos"]["arm"][:7], dtype=np.float32
