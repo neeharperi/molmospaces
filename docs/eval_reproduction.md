@@ -2249,3 +2249,63 @@ Both explanations remain open, and they are not exclusive. Deliberately not choo
 them here: the last time a plausible cause was adopted early in this document it had to be
 retracted, and the honest position is that Cosmos underperforms its published numbers by a
 varying factor for reasons not yet established.
+
+## Audit: Cosmos control rate and chunk size
+
+Campaign 1 flagged both as chosen rather than verified. Auditing them directly.
+
+### Control rate: `policy_dt_ms=66.0` is CORRECT
+
+Three independent lines agree:
+
+1. **The server's own metadata.** Its startup line reports `fps=15.0`, i.e. actions spaced
+   1/15 = 66.7ms. Our 66.0ms matches. This is first-party, from the checkpoint's own config.
+2. **The motion is physically sensible at that rate.** Querying the live server with a DROID
+   observation returns a chunk whose mean per-step joint delta is **0.039 rad**. Executed at
+   66.7ms that is **0.58 rad/s**; at the leaderboard's `# dt: 0.1` it would be 0.39 rad/s. Both
+   are plausible arm speeds, so this test alone does not settle it -- which is why the server
+   metadata matters.
+3. **The leaderboard's `# dt` field is known to be meaningless.** Campaign 1 established that
+   `eval_to_csv.py` echoes whatever `--dt` was passed (argparse default `67/1000`, function
+   default `0.1`) and never derives it from `policy_dt_ms` -- our own MolmoAct2 runs at
+   `policy_dt_ms=200.0` still emitted `# dt: 0.067`. It cannot be used as evidence either way.
+
+An empirical arm (`chunk=8, dt=100`) is running anyway, because "the metadata says so" is how
+the MolmoAct2 control-rate bug survived campaign 1 for a while.
+
+### Chunk size: a real divergence, being measured
+
+The server returns **(32, 8)** -- 32 actions of 7 joints + gripper -- and the client executes
+only the **first 8** before re-querying. Concretely, of the **0.658 rad** of arm travel each
+generated chunk covers, we use **0.150 rad** and discard the rest. Three quarters of every
+inference is thrown away.
+
+That is defensible in principle (re-planning more often is usually better, and the server is
+stateless so nothing desyncs), but it is a genuine divergence from the server's own
+`action_chunk_size=32` default, and campaign 1's note records it was chosen by copying pi0.5's
+tuning rather than from anything Cosmos-specific.
+
+**A/B, on identical episodes** (same task, same `--max_episodes 60`, seed 42 is hardcoded, so
+every arm sees the same episode set). `--max_episodes` is legitimate here precisely because
+this compares arms to each other rather than to the leaderboard:
+
+| arm | chunk | dt | |
+|---|---|---|---|
+| A | 8 | 66.0 | current |
+| B | **32** | 66.0 | the server's own default |
+| C | 8 | **100.0** | the leaderboard's `# dt` taken literally |
+
+Run against a dedicated Cosmos-Edge instance on `:8005` rather than the campaign's `:8003`:
+sharing the single-slot server made the first attempt ~40x slower and would have taken days.
+All three overrides (`COSMOS_CHUNK_SIZE`, `COSMOS_DT_MS`, `COSMOS_PORT`) default to the current
+values, so the seven running campaign lanes are untouched.
+
+### Incidental: MolmoAct2's transport errors are not a server fault
+
+MolmoAct2 holds 8 of the campaign's 9 rollout errors, which looked like a degrading server. It
+is not: the single restart in its log is a clean `Terminated` at the moment the ad-hoc server
+was replaced by the launcher-owned one, and it has run continuously since. The errors are
+occasional connection drops under 4-worker concurrency against a server with a CUDA-graph lock
+-- MolmoAct2 is the only policy speaking HTTP rather than a websocket. Rate is 9 in ~6,000
+episodes (0.15%), capped at 3 in any one cell, and already reflected in the recorded n (999,
+998). Below the level that moves a verdict.

@@ -1,6 +1,7 @@
 from molmo_spaces.configs.policy_configs import BasePolicyConfig
 from molmo_spaces.policy.base_policy import PolicyFactory
 from molmo_spaces.utils.function_utils import make_lenient
+import os
 
 
 class PiPolicyConfig(BasePolicyConfig):
@@ -88,13 +89,19 @@ class CosmosPolicyConfig(BasePolicyConfig):
     # see docs/eval_reproduction.md for why these are two separate registered policies, not
     # a single one with a variant flag.
     checkpoint_path: str = "nvidia/Cosmos3-Edge-Policy-DROID"
-    remote_config: dict | None = dict(host="localhost", port=8003)
+    # Port overridable for auditing against a dedicated server instance, so an A/B does not
+    # queue behind the campaign lane on the shared one. No-op unless COSMOS_PORT is set.
+    remote_config: dict | None = dict(
+        host="localhost", port=int(os.environ.get("COSMOS_PORT", "8003"))
+    )
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     # The server's own action_chunk_size defaults to 32; re-querying at 8 (matching pi0.5's
     # own chunk_size and the tuning already validated for this exact checkpoint family in a
     # sibling project) limits open-loop drift without needing every chunk step.
-    chunk_size: int = 8
+    # Overridable for auditing without editing configs mid-campaign. Defaults to 8, so this
+    # is a no-op unless COSMOS_CHUNK_SIZE is set: the campaign's running lanes are unaffected.
+    chunk_size: int = int(os.environ.get("COSMOS_CHUNK_SIZE", "8"))
     camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
 
     policy_cls: type = None

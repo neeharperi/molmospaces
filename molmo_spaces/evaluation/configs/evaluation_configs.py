@@ -26,6 +26,7 @@ is strictly authoritative for episode initialization.
 """
 
 from __future__ import annotations
+import os
 
 import datetime
 from pathlib import Path
@@ -252,7 +253,7 @@ class CosmosEdgePolicyEvalConfig(JsonBenchmarkEvalConfig):
 
     robot_config: FrankaRobotConfig = FrankaRobotConfig()
     policy_config: CosmosPolicyConfig = CosmosPolicyConfig()
-    policy_dt_ms: float = 66.0  # ~15hz, same as pi0.5
+    policy_dt_ms: float = float(os.environ.get("COSMOS_DT_MS", "66.0"))
     end_on_success: bool = True
 
     def model_post_init(self, __context):
@@ -269,7 +270,7 @@ class CosmosNanoPolicyEvalConfig(JsonBenchmarkEvalConfig):
         checkpoint_path="nvidia/Cosmos3-Nano-Policy-DROID",
         remote_config=dict(host="localhost", port=8004),
     )
-    policy_dt_ms: float = 66.0  # ~15hz, same as pi0.5
+    policy_dt_ms: float = float(os.environ.get("COSMOS_DT_MS", "66.0"))
     end_on_success: bool = True
 
     def model_post_init(self, __context):
