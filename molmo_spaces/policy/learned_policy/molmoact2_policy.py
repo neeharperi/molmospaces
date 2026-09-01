@@ -26,22 +26,57 @@ class MolmoAct2HTTPClient:
         json_numpy.patch()
         self._json_numpy = json_numpy
         self._session = requests.Session()
+        # Captured here rather than imported at module scope: `requests` is deliberately a
+        # lazy import in this class so the module stays importable before multiprocessing
+        # forks. infer() needs the exception types, so bind them to the instance.
+        self._transport_errors = (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.ChunkedEncodingError,
+        )
         self.url = f"http://{host}:{port}/act"
         self.timeout = timeout
         # Health check -- fails fast if the server isn't up yet.
         resp = self._session.get(self.url, timeout=self.timeout)
         resp.raise_for_status()
 
+    # Transport-level failures are retried; HTTP errors are not. A dropped TCP connection
+    # says nothing about the request, and POST /act is idempotent -- the server holds no
+    # per-client state, so replaying the same observation is safe. An HTTP 500 is the server
+    # telling us something real, and must still surface.
+    _TRANSPORT_RETRIES = 3
+    _RETRY_BACKOFF_SECS = 1.0
+
     def infer(self, payload: dict) -> dict:
-        resp = self._session.post(
-            self.url,
-            headers={"Content-Type": "application/json"},
-            data=self._json_numpy.dumps(payload),
-            timeout=self.timeout,
-        )
-        if resp.status_code != 200:
-            raise RuntimeError(f"MolmoAct2 server error {resp.status_code}: {resp.text[:500]}")
-        return resp.json()
+        body = self._json_numpy.dumps(payload)
+        last_exc: Exception | None = None
+        for attempt in range(self._TRANSPORT_RETRIES):
+            try:
+                resp = self._session.post(
+                    self.url,
+                    headers={"Content-Type": "application/json"},
+                    data=body,
+                    timeout=self.timeout,
+                )
+            except self._transport_errors as e:
+                # Observed in this campaign as bursts of ConnectionReset/RemoteDisconnected
+                # when MolmoAct2's server is contended by the other lanes sharing its GPU.
+                # Without a retry each burst costs whole episodes: PnP-v2 lost 7 of 541.
+                #
+                # Those losses are not neutral. A longer episode issues more requests and is
+                # therefore likelier to be hit, and long episodes are disproportionately
+                # failures -- so silently dropping them biases the success rate UPWARD.
+                last_exc = e
+                if attempt + 1 < self._TRANSPORT_RETRIES:
+                    time.sleep(self._RETRY_BACKOFF_SECS * (attempt + 1))
+                    continue
+                raise
+            if resp.status_code != 200:
+                raise RuntimeError(
+                    f"MolmoAct2 server error {resp.status_code}: {resp.text[:500]}"
+                )
+            return resp.json()
+        raise last_exc  # unreachable; the loop either returns or raises
 
 
 class MolmoAct2Policy(InferencePolicy):

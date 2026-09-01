@@ -2348,3 +2348,37 @@ first pass at the arithmetic suggested; 80% would need ~550/arm and about 10 hou
 `cosmos_edge`'s 0.26 on the same cell. Two different checkpoints (4B and 16B), same wrapper,
 same shortfall. That is consistent with either remaining explanation -- a shared wrapper defect,
 or a leaderboard row that was not produced by this harness -- and does not separate them.
+
+### MolmoAct2's dropped episodes were biased, not just lost
+
+`molmoact2_droid`'s in-flight PnP-v2 cell accumulated **7 rollout errors in 541 episodes**
+(1.3%), against a campaign-wide rate of 0.15%. Investigated because it crossed the threshold
+set earlier in this document -- errors spread one-per-cell are noise, several in one cell are a
+signal.
+
+**Not a failing server.** It has 3 days 2 hours of uptime, no crashes, a stable 4.5 GB RSS and
+no server-side errors logged since startup. (Its log shows two "restarts", both on 2026-08-28:
+the initial start and the clean `Terminated` when the ad-hoc server was replaced by the
+launcher-owned one.)
+
+**Contention, in bursts.** The failures cluster -- 19:32 x2, 20:19-20:22 x4, 20:56-20:57 x2 --
+rather than accumulating steadily. MolmoAct2 shares GPU2 with TiPToP and M2T2, all at 100%
+utilisation, and it is the only policy speaking HTTP rather than a websocket. The errors are
+`ConnectionReset` / `RemoteDisconnected` mid-POST.
+
+**Why this mattered more than 1.3% suggests.** `MolmoAct2HTTPClient.infer()` did a single
+`session.post` with no retry, so one dropped connection ended the episode. That loss is **not
+neutral**: a longer episode issues more inference requests and is therefore likelier to be hit,
+and long episodes are disproportionately *failures* (they did not succeed early and terminate).
+Silently dropping them biases the reported success rate **upward**. At 1.3% the effect is small,
+but the mechanism is real and it is the same class of quiet distortion as the oversampling bug
+-- a number that looks complete and is systematically off.
+
+**Fix**: a bounded retry (3 attempts, linear backoff) on transport exceptions only.
+`POST /act` is idempotent -- the server holds no per-client state -- so replaying the same
+observation is safe. HTTP errors are deliberately *not* retried: a 500 is the server saying
+something real and must still surface. Verified with a live `/act` call returning a correct
+(15, 8) action chunk.
+
+Cells already completed keep their recorded `n` (999, 998, and so on); the fix applies to cells
+started from now on.
