@@ -2382,3 +2382,27 @@ something real and must still surface. Verified with a live `/act` call returnin
 
 Cells already completed keep their recorded `n` (999, 998, and so on); the fix applies to cells
 started from now on.
+
+### My own A/B runs corrupted the verdict table
+
+The scheduled status check reported `cosmos_edge / Pick-v1.5 = 26.7% (n=60)`. The real
+full-coverage number is **33.8% (n=1000)**. The 60-episode figure was arm C of the chunk/dt
+A/B, reported as if it were the campaign verdict.
+
+`latest_results_csv()` globbed `<policy>/<task>/*/results.csv` and took `candidates[-1]`.
+`_` is 0x5F and sorts *after* digits, so `_ab_C_dt100/` beat `20260828_full/` and won.
+
+The underscore convention already existed -- `_handshake/`, `_INVALID_*`, `_superseded_*` are
+all skipped -- but only at the **policy** level. Applying it to dates too was a one-line change
+in each of two tools. Note `check_provenance.py` had the same hole: its glob would have
+validated A/B arms as campaign cells.
+
+This is the third time in this campaign that diagnostic output leaked into results tooling: the
+n=1 handshakes "PASSED" everything before being quarantined, the killed TiPToP cell would have
+merged old and new trajectories in one directory, and now this. The recurring lesson is the
+same each time -- **a diagnostic run must be inert to the analysis tools, not merely
+distinguishable by a human reading directory names.** Anything that is not a campaign result
+gets a leading underscore, and every tool that walks `runs/` skips them.
+
+Verified after the fix: `compare_to_leaderboard.py` reports 33.8% (1000) for that cell, and
+`check_provenance.py` validates 24 cells with the A/B arms excluded.

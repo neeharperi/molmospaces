@@ -120,7 +120,14 @@ def main() -> None:
     parser.add_argument("runs_dir", type=Path, help="Root runs/ directory to walk.")
     args = parser.parse_args()
 
-    all_provenance = sorted(args.runs_dir.glob("*/*/*/provenance.json"))
+    # Skip underscore-prefixed DATE directories as well as the quarantined policy dirs below.
+    # A leading underscore marks "not a campaign result": handshakes, A/B arms, debug runs.
+    # compare_to_leaderboard.py applies the same rule -- it had to, after a 60-episode A/B arm
+    # in `_ab_C_dt100/` outsorted the real `20260828_full/` cell and was reported as a verdict.
+    all_provenance = sorted(
+        p for p in args.runs_dir.glob("*/*/*/provenance.json")
+        if not p.parent.name.startswith("_")
+    )
     provenance_files = [
         p for p in all_provenance
         if not any(m in p.parts[-4] for m in QUARANTINE_MARKERS)

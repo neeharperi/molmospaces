@@ -50,10 +50,24 @@ METRIC_TO_COLUMNS = {
 
 
 def latest_results_csv(runs_dir: Path, policy: str, task: str) -> Path | None:
-    candidates = (
-        sorted((runs_dir / policy / task).glob("*/results.csv"))
-        if (runs_dir / policy / task).exists()
-        else []
+    """Newest real results.csv for a cell, ignoring underscore-prefixed date directories.
+
+    A leading underscore marks a directory as not-a-campaign-result. The convention already
+    existed at the policy level (`_handshake/`, `_INVALID_*`, `_superseded_*`, which
+    check_provenance.py skips by the same rule) but was not applied to the date level, and the
+    omission actively corrupted output: `_` is 0x5F, which sorts AFTER digits, so a 60-episode
+    A/B arm in `_ab_C_dt100/` beat the real `20260828_full/` cell to `candidates[-1]` and was
+    reported as cosmos_edge's Pick-v1.5 verdict -- 26.7% (n=60) in place of 33.8% (n=1000).
+
+    Same failure this project hit with the n=1 handshake cells, which "PASSED" everything
+    because a Wilson interval at n=1 spans the range. Diagnostic runs must be inert to the
+    comparison, not merely distinguishable by a human reading directory names.
+    """
+    cell_dir = runs_dir / policy / task
+    if not cell_dir.exists():
+        return None
+    candidates = sorted(
+        c for c in cell_dir.glob("*/results.csv") if not c.parent.name.startswith("_")
     )
     return candidates[-1] if candidates else None
 
