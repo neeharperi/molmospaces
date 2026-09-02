@@ -2700,3 +2700,35 @@ ambiguity also persists: re-probed `cosmos_edge`, `cosmos_nano`, `cosmos3_edge`,
 `cosmos3_nano` slugs live and all still 404 to the SPA shell. Only bare `cosmos`
 resolves, so which of the two DROID checkpoints produced the reference row remains
 unknown, and both our Cosmos verdicts stay weaker evidence than the rest.
+
+### jerk_joint_mean is not comparable across the two pipelines (checked, discarded)
+
+Both our results.csv and the leaderboard CSVs carry `jerk_joint_mean`, which looked
+like an ideal Cosmos diagnostic: a physical observable independent of success rate,
+so an action-decoding or scaling fault would show up in it even where success
+cannot separate causes. Our cosmos_edge Pick-v2-classic reads 1391.56 against the
+leaderboard's 61.58 -- 22.6x, which reads instantly as "our actions are violently
+jerkier, there's the bug".
+
+It is not. Checking a policy that PASSES as a control kills it:
+
+  | policy      | task            | ours    | leaderboard | ratio |
+  |-------------|-----------------|---------|-------------|-------|
+  | cosmos_edge | Pick-v2-classic | 1391.56 |       61.58 | 22.6x |
+  | cosmos_edge | Open-v1         | 1465.82 |      320.00 |  4.6x |
+  | pi05_droid  | Pick-v2-classic | 2479.37 |       83.41 | 29.7x |
+  | pi05_droid  | Open-v1         | 2400.38 |       37.44 | 64.1x |
+  | pi0_droid   | Open-v1         | 1598.67 |       26.59 | 60.1x |
+  | tiptop      | Pick-v1.5       |    1.32 |      675.00 | 0.002x|
+
+pi05 and pi0 pass their Group A verdicts while showing LARGER ratios than Cosmos.
+The offset is systematic and its size varies by policy and task, so the two
+pipelines are computing this quantity on different bases (units, sampling rate, or
+definition -- not determined, and not worth determining). Cosmos is not an outlier
+here; it has the smallest ratio of the three learned policies measured.
+
+Recorded because the number is arresting and someone will rediscover it. Do not
+compare jerk across the two pipelines without first calibrating on a policy whose
+success rates already agree.
+
+This is the eighth eliminated Cosmos hypothesis. The gap stands.
