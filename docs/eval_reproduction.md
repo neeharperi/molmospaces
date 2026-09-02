@@ -2555,3 +2555,26 @@ which is what licenses using small A/B arms to test configuration questions at a
 correct (server `fps=15.0`, and dt=100 measured 6.7pp worse), and `chunk_size` has no
 significant effect either way. **Neither explains the Cosmos gap**, which remains the campaign's
 one unexplained result.
+
+### Caveat: TiPToP's row spans two Gemini planner versions
+
+`tiptop/Open-v1` (0.8%) and `tiptop/Close-v1` (0.55%) were produced with
+`gemini-robotics-er-1.6-preview`, finishing 08-30 17:05 and 08-31 00:15 -- both
+cleanly before the 08-31 01:23 retirement, so neither is 404-contaminated. Every
+later TiPToP cell uses `gemini-robotics-er-2-preview`.
+
+That swap is worth about 20pp: Pick-v1.5 went 41.9% -> 62.0% (z=+9.00) on re-run.
+So the two Group-A numbers are measured with a materially different planner from
+the rest of the row, and their near-zero scores cannot be cleanly attributed.
+Two readings are consistent with the data and this campaign cannot separate them:
+
+  - a genuine capability limit -- TiPToP is an M2T2-grasp + cuTAMP pipeline, and
+    articulated open/close is not in its motion vocabulary. The leaderboard has
+    no TiPToP entry for either task, which is weak corroboration.
+  - a weaker planner -- er-1.6 underperforming er-2 on articulated scenes.
+
+er-1.6 is retired, so the only available remedy is re-running both cells on er-2
+(~15 h on one lane). Not done: both cells lack a leaderboard entry, so neither
+carries a verdict, and the lane time is better spent on cells that do. Recorded
+here rather than silently shipping two numbers produced by a different planner
+than their row-mates.
