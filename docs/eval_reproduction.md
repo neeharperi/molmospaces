@@ -2649,3 +2649,54 @@ Settling Group B needs an A/B, ~22 h/arm at n=300 given ~75 h per full DreamZero
 cell. Not run: DreamZero has no Group B leaderboard entry, so those 7 cells carry
 no verdict and cannot move the campaign's acceptance gate. They ship as data
 points with this caveat attached rather than as silently degraded numbers.
+
+### The leaderboard CSVs declare a control rate, and ours does not always match it
+
+Followed the one un-pursued Cosmos lead -- that its leaderboard rows are the only
+ones whose `# run_path` is a scratch dir. Re-fetched the live per-(task, policy)
+CSVs on 2026-09-02, two weeks after the 08-18 snapshot. Each carries a header
+block, and it includes the control rate:
+
+    # policy_name: cosmos
+    # run_path: /tmp/cosmos3_csv/mb_pick_classic
+    # dt: 0.1
+    # max_steps: None
+
+Declared `dt`, by policy and group:
+
+  | policy    | Group A (ms_open) | Group B (mb_pick_classic) |
+  |-----------|-------------------|---------------------------|
+  | cosmos    | 0.1               | 0.1                       |
+  | pi05      | 0.1               | 0.067                     |
+  | pi0       | 0.1               | --                        |
+  | dreamzero | 0.1               | --                        |
+  | tiptop    | --                | 0.067                     |
+
+Two things follow.
+
+FIRST, a campaign-wide deviation worth stating plainly: every Group A row on the
+leaderboard was produced at dt=0.1, and we run Group A at policy_dt_ms=66.0. That
+is a protocol mismatch on all 14 Group A cells, for every policy. It does not
+appear to be disqualifying -- pi05 (Open 20.7 vs 22.7, Close 67.2 vs 65.14) and
+pi0 (9.8 vs 11.0, 54.6 vs 53.11) both PASS both cells against a dt=0.1 reference
+while running at 66 ms -- but those are protocol-mismatched PASSes and should be
+described as such.
+
+SECOND, and this is the useful part: dt is now ELIMINATED as the Cosmos
+explanation, on an internal control rather than on argument. On Open-v1, pi05 and
+cosmos have the *same* reference dt (0.1) and are run here at the *same* 66 ms.
+pi05 passes; cosmos misses by 4x (8.3% vs 32.0%). A mismatch shared by both
+cannot explain a failure specific to one. This agrees with the earlier direct
+measurement (dt=100 measured 6.7pp WORSE for Cosmos, not better) and closes the
+question from the opposite direction.
+
+Also eliminated this pass: episode truncation. `max_steps: None` on the reference,
+and our trajectories show cosmos_edge running 39 steps on Pick-v2-classic --
+identical to pi05 (39) and pi0 (39), with ~90% of episodes reaching the cap in all
+three. Cosmos is not being cut short relative to policies that pass.
+
+Still unresolved, and still the campaign's one unexplained result. The checkpoint
+ambiguity also persists: re-probed `cosmos_edge`, `cosmos_nano`, `cosmos3_edge`,
+`cosmos3_nano` slugs live and all still 404 to the SPA shell. Only bare `cosmos`
+resolves, so which of the two DROID checkpoints produced the reference row remains
+unknown, and both our Cosmos verdicts stay weaker evidence than the rest.
