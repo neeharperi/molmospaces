@@ -2612,3 +2612,40 @@ workers against a single server is not a slower version of that -- it is wrong.
 
 Verified healthy at 1 worker: Open-v1 at 35/41 houses holds 843 trajectories,
 mean 24.1/house (range 12-34), projecting 988 against a ~1000-episode benchmark.
+
+### DreamZero's Group B cells feed a frame with no robot in it (confirmed, not changed)
+
+`dreamzero_policy.py:196-203` selects `randomized_zed2_analogue_1` and `_2` as two
+distinct exterior views on bench-v2 tasks. The images were finally opened rather
+than reasoned about:
+
+  runs/_debug/Pick-v2-classic/randomized_zed2_analogue_1.png -- Franka arm, target
+    object, workspace. The good view.
+  runs/_debug/Pick-v2-classic/randomized_zed2_analogue_2.png -- a bathroom sink, a
+    toilet, and the target object. NO ROBOT ANYWHERE IN FRAME.
+
+These are not a DROID-style calibrated stereo pair. `_2` is an independently
+randomized viewpoint of the room. So on all 7 Group B tasks DreamZero receives a
+robot-less frame in a slot its checkpoint expects a workspace view in.
+
+For Cosmos, that exact configuration measured -3.0pp at full coverage
+(8.20% duplicating -> 5.20% two-view, z=-2.68).
+
+DELIBERATELY NOT CHANGED. The Cosmos retraction earlier in this campaign was
+caused by changing this on reasoning and measuring afterwards; the reasoning was
+confident and backwards. Reasoning now says "duplicate is better" by analogy, and
+that is the same kind of argument, not evidence. DreamZero is a different
+architecture -- an AR video model with per-camera frame-history deques -- and its
+response need not match Cosmos's.
+
+What is available cheaply: DreamZero's Group A cells (Open-v1, Close-v1) already
+exercise the duplicating path, because FrankaDroidCameraSystem exposes only one
+exterior camera and `dreamzero_policy.py:204` duplicates it with a warning. Both
+have leaderboard entries (24.85 / 60.33). Their verdicts therefore validate the
+duplicate path end-to-end at zero extra cost -- they do not prove duplicating is
+better for Group B, but they do establish the path is sound.
+
+Settling Group B needs an A/B, ~22 h/arm at n=300 given ~75 h per full DreamZero
+cell. Not run: DreamZero has no Group B leaderboard entry, so those 7 cells carry
+no verdict and cannot move the campaign's acceptance gate. They ship as data
+points with this caveat attached rather than as silently degraded numbers.
