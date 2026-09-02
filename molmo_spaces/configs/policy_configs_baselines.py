@@ -150,7 +150,13 @@ class TiptopPolicyConfig(BasePolicyConfig):
 
 class DreamZeroPolicyConfig(BasePolicyConfig):
     checkpoint_path: str = "checkpoints/dreamzero"
-    remote_config: dict = dict(host="localhost", port=5000)
+    # Fan-out: each DreamZero worker needs its OWN server, because the server keeps a
+    # single _current_session_id and interleaving episodes would wipe the AR frame
+    # history (see docs/eval_reproduction.md). DREAMZERO_PORT selects which one.
+    # No-op unless DREAMZERO_PORT is set.
+    remote_config: dict = dict(
+        host="localhost", port=int(os.environ.get("DREAMZERO_PORT", "5000"))
+    )
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     chunk_size: int = 24

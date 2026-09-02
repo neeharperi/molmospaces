@@ -167,7 +167,9 @@ POLICIES: dict[str, PolicySpec] = {
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:DreamZeroPolicyEvalConfig",
         checkpoint_path="third_party/dreamzero/checkpoints/DreamZero-DROID",
         host="localhost",
-        port=5000,
+        # must track DreamZeroPolicyConfig.remote_config, or eval.py probes the wrong
+        # port during fan-out and hard-fails a lane that is actually healthy.
+        port=int(os.environ.get("DREAMZERO_PORT", "5000")),
     ),
     "cosmos_edge": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:CosmosEdgePolicyEvalConfig",
