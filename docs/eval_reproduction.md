@@ -2578,3 +2578,37 @@ er-1.6 is retired, so the only available remedy is re-running both cells on er-2
 carries a verdict, and the lane time is better spent on cells that do. Recorded
 here rather than silently shipping two numbers produced by a different planner
 than their row-mates.
+
+### DreamZero must run at --num_workers 1 (correctness, not tuning)
+
+Every other lane runs 4 render workers; the DreamZero lane is launched with
+`CLASSIC_WORKERS=1 FILAMENT_WORKERS=1`. That looks like an oversight on the
+campaign's critical path -- DreamZero is the slowest policy and sets the
+completion date -- and it is not. Raising it silently corrupts results.
+
+DreamZero is not served by `WebsocketPolicyServer`. It uses its own
+`third_party/dreamzero/socket_test_optimized_AR.py --enable-dit-cache`, which is
+autoregressive and **stateful across calls within an episode**: a rolling frame
+history feeds the AR block-conditioning stack. The server tracks whose episode it
+is with a single instance attribute:
+
+    socket_test_optimized_AR.py:77    self._current_session_id: str | None = None
+    socket_test_optimized_AR.py:256   if session_id != self._current_session_id:
+    socket_test_optimized_AR.py:260       self._reset_state()
+
+`_current_session_id` lives on the policy object, not per connection, and the
+client mints a fresh `uuid4()` per `reset()`
+(`dreamzero_policy.py:128`). So with N>1 workers, N episodes interleave through
+one server with N distinct session ids, and *every alternating request* trips the
+session-change branch and wipes the frame history both episodes depend on.
+
+The failure is silent in exactly the way this campaign's rules warn about: actions
+stay well-formed, non-constant and NaN-free, the run completes, and only the
+number is wrong. A handshake would not catch it.
+
+Consequence for scheduling: the only safe way to parallelize DreamZero is N
+servers x 1 worker each, on separate GPUs, so each server owns one session. Adding
+workers against a single server is not a slower version of that -- it is wrong.
+
+Verified healthy at 1 worker: Open-v1 at 35/41 houses holds 843 trajectories,
+mean 24.1/house (range 12-34), projecting 988 against a ~1000-episode benchmark.
