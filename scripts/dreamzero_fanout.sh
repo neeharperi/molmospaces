@@ -29,6 +29,7 @@ DATE_TAG="${DATE_TAG:?set DATE_TAG, e.g. 20260828_full}"
 MODE="${1:-plan}"
 POLL_SECS="${POLL_SECS:-600}"
 ENVS="${MLSPACES_ENVS:-$HOME/anaconda3/envs}"
+source "${CONDA_SH:-$HOME/anaconda3/etc/profile.d/conda.sh}"
 CLAIMS="runs/_lanes/dz_claims"
 mkdir -p "$CLAIMS" runs/_lanes runs/_servers
 
@@ -87,6 +88,14 @@ launch() {  # $1 = task  $2 = renderer  $3 = gpu
     local slog="runs/_servers/dreamzero_fanout_gpu${gpu}.log"
     local llog="runs/_lanes/dz_fanout_gpu${gpu}_${DATE_TAG}.log"
 
+    # If the port is already held, a previous server is still up (or a stale one is). Do not
+    # start a second: the readiness probe below only checks that SOMETHING holds the port, so
+    # a leftover server made every subsequent launch look instantly successful.
+    if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
+        exec 3<&-
+        echo "  !! GPU$gpu: :$port already held; refusing to stack a second server. Releasing $task." >&2
+        rmdir "$CLAIMS/$task" 2>/dev/null; return 1
+    fi
     echo "  [$(date +%H:%M:%S)] GPU$gpu: starting server on :$port for $task ($renderer)"
     ( GPUS="$gpu" DIT_SPLIT=0 PORT="$port" nohup bash scripts/serve_dreamzero.sh >>"$slog" 2>&1 & )
 
@@ -103,10 +112,15 @@ launch() {  # $1 = task  $2 = renderer  $3 = gpu
     local env_name=mlspaces-classic
     [ "$renderer" = "filament" ] && env_name=mlspaces-filament
     echo "  [$(date +%H:%M:%S)] GPU$gpu: server up, launching $task in $env_name" | tee -a "$llog"
+    # eval.py hard-fails unless CONDA_DEFAULT_ENV names the renderer's env. Addressing the
+    # interpreter by path leaves it as 'base', so every lane died instantly with
+    # "active env is 'base'" while this script cheerfully claimed the next cell.
     ( DREAMZERO_PORT="$port" LANE_GPU="$gpu" MUJOCO_EGL_DEVICE_ID="$egl" \
-      nohup "$ENVS/$env_name/bin/python" scripts/eval.py \
+      nohup conda run -n "$env_name" --no-capture-output \
+        python scripts/eval.py \
         --policy dreamzero --task "$task" --num_workers 1 --date "$DATE_TAG" \
         >>"$llog" 2>&1 & )
+    echo $! > "runs/_lanes/dz_fanout_gpu${gpu}.pid"
 }
 
 echo "dreamzero fan-out: mode=$MODE date=$DATE_TAG"
@@ -122,10 +136,15 @@ while :; do
 
     for gpu in 1 2 3; do
         gpu_free "$gpu" || { [ "$MODE" = plan ] && echo "  GPU$gpu busy (waiting on:$(gpu_owners $gpu))"; continue; }
-        # already running a fan-out lane on this card?
-        ps -eo args 2>/dev/null | grep -q "[e]val\.py .*--policy dreamzero" && \
-          [ -f "runs/_lanes/dz_fanout_gpu${gpu}_${DATE_TAG}.log" ] && \
-          pgrep -f "dz_fanout_gpu${gpu}" >/dev/null 2>&1 && continue
+        # Already running a fan-out lane on this card? Track it by pid file. The previous
+        # check pgrep'd for "dz_fanout_gpu<N>", which only ever appeared in the redirect
+        # target -- never in argv -- so it matched nothing, the guard never fired, and this
+        # loop claimed one more cell on every poll until it had claimed them all.
+        pidf="runs/_lanes/dz_fanout_gpu${gpu}.pid"
+        if [ -f "$pidf" ] && kill -0 "$(cat "$pidf" 2>/dev/null)" 2>/dev/null; then
+            [ "$MODE" = plan ] && echo "  GPU$gpu already running a fan-out lane (pid $(cat "$pidf"))"
+            continue
+        fi
         for spec in "${cells[@]}"; do
             task="${spec%%$'\t'*}"; renderer="${spec##*$'\t'}"
             [ -d "$CLAIMS/$task" ] && continue
