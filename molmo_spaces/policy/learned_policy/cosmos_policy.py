@@ -137,9 +137,26 @@ class Cosmos_Policy(InferencePolicy):
         exterior_image = _lanczos_resize(obs[exo_camera_key], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
         wrist_image = _lanczos_resize(obs[wrist_camera_key], _WRIST_HEIGHT, _WRIST_WIDTH)
 
+        # COSMOS_EXTERIOR_2 selects a genuinely distinct second third-person view.
+        # Unset (default) reproduces the duplicating behaviour the campaign has used
+        # throughout, so this is a no-op unless explicitly set.
+        #
+        # The retracted zed2_1+zed2_2 experiment failed because zed2_2 frequently
+        # contains NO ROBOT (see runs/_debug/Pick-v2-classic/). It does not follow that
+        # duplication is right -- the checkpoint's own prompt asks for "two horizontally
+        # concatenated third-person perspective views of the scene from opposite sides,
+        # WITH THE ROBOT VISIBLE", and bench-v2 exposes two other robot-visible
+        # exteriors that were never tried: randomized_gopro_analogue_1 and
+        # randomized_zed2_analogue_1.
+        _exo2 = os.environ.get("COSMOS_EXTERIOR_2", "")
+        if _exo2 and _exo2 in obs:
+            exterior_image_2 = _lanczos_resize(obs[_exo2], _EXTERIOR_HEIGHT, _EXTERIOR_WIDTH)
+        else:
+            exterior_image_2 = exterior_image
+
         model_input = {
             "observation/exterior_image_1_left": exterior_image,
-            "observation/exterior_image_2_left": exterior_image,
+            "observation/exterior_image_2_left": exterior_image_2,
             "observation/wrist_image_left": wrist_image,
             "observation/joint_position": np.array(
                 obs["qpos"]["arm"][:7], dtype=np.float32
