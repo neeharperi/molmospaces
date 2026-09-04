@@ -30,6 +30,15 @@ MODE="${1:-plan}"
 POLL_SECS="${POLL_SECS:-600}"
 ENVS="${MLSPACES_ENVS:-$HOME/anaconda3/envs}"
 source "${CONDA_SH:-$HOME/anaconda3/etc/profile.d/conda.sh}"
+# The harness env the lanes need. launch_campaign.sh exports these for the normal lanes and
+# this script inherits nothing from it, so without them every fan-out lane dies immediately
+# on "MLSPACES_ASSETS_DIR is not set." -- while still holding its claim.
+. "$PWD/scripts/nvidia_gl_env.sh" 2>/dev/null || true
+export MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/mlspaces-assets}"
+export MLSPACES_FORCE_INSTALL="${MLSPACES_FORCE_INSTALL:-False}"
+export MLSPACES_PINNED_ASSETS_FILE="${MLSPACES_PINNED_ASSETS_FILE:-$PWD/reference/pinned_assets_20260816.json}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+export MKL_NUM_THREADS="$OMP_NUM_THREADS"
 CLAIMS="runs/_lanes/dz_claims"
 mkdir -p "$CLAIMS" runs/_lanes runs/_servers
 
@@ -93,11 +102,14 @@ launch() {  # $1 = task  $2 = renderer  $3 = gpu
     # a leftover server made every subsequent launch look instantly successful.
     if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
         exec 3<&-
-        echo "  !! GPU$gpu: :$port already held; refusing to stack a second server. Releasing $task." >&2
-        rmdir "$CLAIMS/$task" 2>/dev/null; return 1
+        # A server is already listening. Since the pid-file guard above proved no fan-out lane
+        # is running on this card, that server is idle -- reuse it rather than stacking a
+        # second one (which would OOM) or releasing the claim (which left the card idle).
+        echo "  [$(date +%H:%M:%S)] GPU$gpu: reusing existing server on :$port for $task ($renderer)"
+    else
+        echo "  [$(date +%H:%M:%S)] GPU$gpu: starting server on :$port for $task ($renderer)"
+        ( GPUS="$gpu" DIT_SPLIT=0 PORT="$port" nohup bash scripts/serve_dreamzero.sh >>"$slog" 2>&1 & )
     fi
-    echo "  [$(date +%H:%M:%S)] GPU$gpu: starting server on :$port for $task ($renderer)"
-    ( GPUS="$gpu" DIT_SPLIT=0 PORT="$port" nohup bash scripts/serve_dreamzero.sh >>"$slog" 2>&1 & )
 
     for _ in $(seq 1 120); do   # serve_dreamzero warms for several minutes; 20 min ceiling
         (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null && { exec 3<&-; break; }
@@ -120,7 +132,16 @@ launch() {  # $1 = task  $2 = renderer  $3 = gpu
         python scripts/eval.py \
         --policy dreamzero --task "$task" --num_workers 1 --date "$DATE_TAG" \
         >>"$llog" 2>&1 & )
-    echo $! > "runs/_lanes/dz_fanout_gpu${gpu}.pid"
+    local lane_pid=$!
+    echo "$lane_pid" > "runs/_lanes/dz_fanout_gpu${gpu}.pid"
+    # A lane that dies in the first 60s did not start; release the claim so the cell is not
+    # stranded. Previously a startup failure held its claim forever and the card idled.
+    sleep 60
+    if ! kill -0 "$lane_pid" 2>/dev/null && [ ! -e "runs/dreamzero/$task/$DATE_TAG" ]; then
+        echo "  !! GPU$gpu: $task lane died at startup; releasing claim. See $llog" >&2
+        rmdir "$CLAIMS/$task" 2>/dev/null
+        rm -f "runs/_lanes/dz_fanout_gpu${gpu}.pid"
+    fi
 }
 
 echo "dreamzero fan-out: mode=$MODE date=$DATE_TAG"
