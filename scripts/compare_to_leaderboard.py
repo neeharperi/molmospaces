@@ -29,6 +29,7 @@ while only some policies have landed.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -89,17 +90,34 @@ def successes_and_total(overall: pd.Series, metric: str) -> tuple[int, int]:
     return int(overall[s_col]), int(overall[n_col])
 
 
-def verdict_row(task: str, policy: str, successes: int, total: int, leaderboard_pct: float) -> dict:
+# A partial cell does not merely lose precision -- it INVERTS the test. The Wilson interval
+# on 1 sample spans nearly [0, 1], so it contains every possible leaderboard value and the
+# cell "PASSES" whatever the truth is. On 2026-09-05 a GPU3 filament OOM left seven cells
+# with partial trajectory sets, two of them n=1, and both were reported as PASS.
+# The `_`-prefix skip already guards against A/B arms leaking in; this guards against a
+# real cell that simply did not finish.
+MIN_COVERAGE_FRACTION = float(os.environ.get("MLSPACES_MIN_COVERAGE", "0.8"))
+
+
+def verdict_row(
+    task: str, policy: str, successes: int, total: int, leaderboard_pct: float,
+    leaderboard_n: int | None = None,
+) -> dict:
     lo, hi = wilson_interval(successes, total)
     ours_pct = 100.0 * successes / total if total else 0.0
     passed = lo * 100.0 <= leaderboard_pct <= hi * 100.0
+    verdict = "PASS" if passed else "FAIL"
+    # Refuse to score a cell that did not cover the benchmark. Compared against the
+    # leaderboard's own episode count, which is the only per-task size available here.
+    if leaderboard_n and total < MIN_COVERAGE_FRACTION * leaderboard_n:
+        verdict = "INCOMPLETE"
     return {
         "task": task,
         "policy": policy,
         "ours_pct": round(ours_pct, 1),
         "n": total,
         "leaderboard_pct": leaderboard_pct,
-        "verdict": "PASS" if passed else "FAIL",
+        "verdict": verdict,
     }
 
 
@@ -165,7 +183,10 @@ def main() -> None:
 
         overall = read_overall(results_csv)
         successes, total = successes_and_total(overall, metric)
-        per_task_rows.append(verdict_row(task, policy, successes, total, row["success_rate"]))
+        per_task_rows.append(
+            verdict_row(task, policy, successes, total, row["success_rate"],
+                        leaderboard_n=int(row.get("n_episodes") or 0) or None)
+        )
 
         if task in GROUP_B:
             s, t = pooled.get(policy, (0, 0))

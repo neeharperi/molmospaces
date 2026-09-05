@@ -46,6 +46,20 @@ mkdir -p "$CLAIMS" runs/_lanes runs/_servers
 # GPU 0 is DreamZero's own card and is never claimable here.
 gpu_owners() { case "$1" in 1) echo "cosmos_nano cosmos_edge";; 2) echo "molmoact2_droid tiptop";; 3) echo "pi05_droid pi0_droid";; *) echo "";; esac; }
 
+# GPU3 IS THE FILAMENT CARD AND IS PERMANENTLY OFF LIMITS TO THE FAN-OUT.
+# Filament rendering is not steerable: it ignores MUJOCO_EGL_DEVICE_ID and
+# CUDA_VISIBLE_DEVICES and always lands on the same physical card (see
+# scripts/launch_campaign.sh). Every filament lane in the campaign therefore renders on
+# GPU3 no matter which card its policy server sits on. Placing a 53 GB DreamZero server
+# there on 2026-09-04 pushed GPU3 to 91.4 of 95.8 GiB, filament contexts stopped
+# allocating, and seven cells were written from partial or empty trajectory sets --
+# quarantined under runs/_INVALID_gpu3_filament_oom_20260905/.
+#
+# "pi05 and pi0 have finished, so GPU3 is free" is true of the POLICY SERVERS and false
+# of the renderer. Free-looking memory on GPU3 is filament's headroom, not ours.
+FANOUT_FORBIDDEN_GPUS="${FANOUT_FORBIDDEN_GPUS:-3}"
+gpu_forbidden() { case " $FANOUT_FORBIDDEN_GPUS " in *" $1 "*) return 0;; *) return 1;; esac; }
+
 lane_running() {  # $1 = policy. Bracket guard so this never matches its own pipeline.
     ps -eo args 2>/dev/null | grep -q "[e]val\.py .*--policy $1\b"
 }
@@ -156,6 +170,10 @@ while :; do
     if [ "${#cells[@]}" -eq 0 ]; then echo "all DreamZero cells have results; nothing left to fan out"; exit 0; fi
 
     for gpu in 1 2 3; do
+        if gpu_forbidden "$gpu"; then
+            [ "$MODE" = plan ] && echo "  GPU$gpu skipped (filament renders here; see comment)"
+            continue
+        fi
         gpu_free "$gpu" || { [ "$MODE" = plan ] && echo "  GPU$gpu busy (waiting on:$(gpu_owners $gpu))"; continue; }
         # Already running a fan-out lane on this card? Track it by pid file. The previous
         # check pgrep'd for "dz_fanout_gpu<N>", which only ever appeared in the redirect
