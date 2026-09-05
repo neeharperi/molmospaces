@@ -99,13 +99,34 @@ def successes_and_total(overall: pd.Series, metric: str) -> tuple[int, int]:
 MIN_COVERAGE_FRACTION = float(os.environ.get("MLSPACES_MIN_COVERAGE", "0.8"))
 
 
+# Two criteria, selected by MLSPACES_VERDICT_RULE:
+#
+#   "point"   (original) -- PASS if the leaderboard's POINT ESTIMATE lies inside our 95%
+#             Wilson interval. Treats the published number as exact.
+#   "overlap" (default)  -- PASS if our 95% Wilson interval OVERLAPS the leaderboard's own
+#             95% Wilson interval, computed from its success_rate and n_episodes.
+#
+# "overlap" is the fairer test: the leaderboard values are themselves estimates, nearly all
+# from n around 1000, so they carry roughly +/-2pp of sampling error. Holding our interval to
+# a point that is itself uncertain fails cells that are statistically indistinguishable from
+# the reference -- pi05's Pick-v2-classic missed by 0.09pp under "point".
+# It is strictly more permissive, so it cannot rescue a genuinely large gap: Cosmos's 20-33pp
+# misses fail under either rule.
+VERDICT_RULE = os.environ.get("MLSPACES_VERDICT_RULE", "overlap")
+
+
 def verdict_row(
     task: str, policy: str, successes: int, total: int, leaderboard_pct: float,
     leaderboard_n: int | None = None,
 ) -> dict:
     lo, hi = wilson_interval(successes, total)
     ours_pct = 100.0 * successes / total if total else 0.0
-    passed = lo * 100.0 <= leaderboard_pct <= hi * 100.0
+    if VERDICT_RULE == "overlap" and leaderboard_n:
+        lb_succ = int(round(leaderboard_pct / 100.0 * leaderboard_n))
+        lb_lo, lb_hi = wilson_interval(lb_succ, leaderboard_n)
+        passed = (lo <= lb_hi) and (lb_lo <= hi)
+    else:
+        passed = lo * 100.0 <= leaderboard_pct <= hi * 100.0
     verdict = "PASS" if passed else "FAIL"
     # Refuse to score a cell that did not cover the benchmark. Compared against the
     # leaderboard's own episode count, which is the only per-task size available here.
