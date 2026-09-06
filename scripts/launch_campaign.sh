@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# Launch the full campaign: 7 policy servers + 7 eval lanes across 4 GPUs, in one tmux session.
+#
+#   DATE_TAG=20260828_full bash scripts/launch_campaign.sh servers   # start the servers only
+#   DATE_TAG=20260828_full bash scripts/launch_campaign.sh lanes group-a
+#   DATE_TAG=20260828_full bash scripts/launch_campaign.sh lanes group-b
+#   bash scripts/launch_campaign.sh status
+#
+# Servers and lanes are separate subcommands on purpose: servers must be up and warmed before
+# any lane starts (scripts/eval.py TCP-probes and hard-fails otherwise), and servers outlive
+# the group-a -> group-b transition.
+#
+# GPU ASSIGNMENT. Weights total ~158 GB against 4 x ~92 GB usable, so all seven co-reside with
+# room to spare. Placement is by footprint and by which pairs never spike together:
+#
+#   GPU0  dreamzero  45 GB                            + 1 render lane
+#   GPU1  (free -- Cosmos removed 2026-09-06)
+#   GPU2  molmoact2 22 + tiptop 10 + m2t2 5           + 2 render lanes
+#   GPU3  pi05 ~19 + pi0 ~19 (JAX capped)             + 2 render lanes
+#
+# DreamZero gets a card to itself: it is the largest and the slowest, so it sets the critical
+# path and should not queue behind anyone. TiPToP and M2T2 are deliberately together -- TiPToP
+# posts a point cloud to M2T2 for every planning call, and keeping that off the cross-NUMA
+# path matters more than balancing bytes. pi0/pi0.5 only fit together because
+# serve_openpi.sh caps JAX's allocator; unpatched, either one would take 75% of the card.
+#
+# NUMA: GPU0/1 are on node 0, GPU2/3 on node 1 (verified via each device's
+# /sys/bus/pci/devices/<addr>/numa_node). Lanes are CPU-pinned to their GPU's node so a
+# lane's MuJoCo workers do not sit on the far socket from the card they render on.
+#
+# Pinning uses `taskset`, not `numactl` -- numactl is NOT installed on this host. taskset
+# gives CPU affinity but not memory binding, so this is the weaker half of what numactl would
+# do; it is still the half that matters for 28 render workers. The node CPU lists are read
+# from /sys rather than hardcoded, so this survives a different machine.
+#
+# FILAMENT IS NOT STEERABLE, and the lane table above cannot change that.
+# MUJOCO_EGL_DEVICE_ID is an EGL knob; the filament renderer is Vulkan and picks its own
+# physical device. Measured: it ignores both MUJOCO_EGL_DEVICE_ID and CUDA_VISIBLE_DEVICES and
+# lands on the same card every time. Neither the Vulkan loader (1.3.204) nor NVIDIA's ICD
+# exposes a device-select variable, and mujoco's filament build exposes none either.
+#
+# So in a filament phase every lane's rendering concentrates on one GPU regardless of LANE_GPU,
+# while the policy servers stay where this table puts them. That is a throughput concern, not a
+# correctness one: 8 concurrent filament contexts were verified working on this hardware, with
+# no errors and no "HandleAllocator arena is full" warning. The reference campaign capped
+# filament at --num_workers 1 because 4 contexts failed on its 48 GB cards; that limit does not
+# hold here, and raising it is the single biggest wall-clock lever in the campaign, so it is
+# worth re-testing against a real cell before accepting 1.
+
+# NOTE this host is SHARED. Another user's jobs sit on all four GPUs. Memory headroom is
+# ample, but they consume compute, so wall-clock will exceed a dedicated-node estimate.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+REPO="$PWD"
+SESSION="${SESSION:-campaign}"
+DATE_TAG="${DATE_TAG:?set DATE_TAG, e.g. 20260828_full}"
+ENVS="${MLSPACES_ENVS:-$HOME/anaconda3/envs}"
+export MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/mlspaces-assets}"
+
+# policy  LANE_GPU  NUMA_NODE   -- EGL device id is resolved per-GPU at launch (see below)
+# NUMA node is asserted at launch against /sys, so a wrong entry here fails loudly.
+LANES=(
+  "dreamzero      0 0"
+  "molmoact2_droid 2 1"
+  "tiptop         2 1"
+  "pi05_droid     3 1"
+  "pi0_droid      3 1"
+)
+
+# CPU list for a NUMA node, e.g. "0-55,112-167". Empty if the node does not exist.
+cpus_for_node() { cat "/sys/devices/system/node/node$1/cpulist" 2>/dev/null; }
+
+# The NUMA node a given nvidia-smi GPU index actually sits on, per /sys.
+numa_for_gpu() {
+    local bus; bus=$(nvidia-smi --query-gpu=pci.bus_id --format=csv,noheader -i "$1" \
+                     | tr 'A-Z' 'a-z' | sed 's/^0*\(....:..:..\..\)$/\1/')
+    cat "/sys/bus/pci/devices/${bus}/numa_node" 2>/dev/null
+}
+
+# MUJOCO_EGL_DEVICE_ID for a given nvidia-smi GPU index, from the cached map that
+# scripts/probe_egl_mapping.py writes (regenerated here if absent). Reading a machine-readable
+# file beats scraping the probe's prose, and beats assuming identity: it happens to BE identity
+# on this host, but that was MEASURED -- on the 2-GPU host this campaign started on it was
+# reversed, and under the Mesa EGL vendor here it also reads as reversed.
+EGL_MAP="runs/_egl_mapping.txt"
+egl_for() {
+    if [ ! -s "$EGL_MAP" ]; then
+        echo "  no $EGL_MAP; measuring (about 60s)..." >&2
+        "$ENVS/mlspaces-classic/bin/python" scripts/probe_egl_mapping.py >&2 || return 1
+    fi
+    awk -v g="$1" '$1 !~ /^#/ && $1 == g {print $2; found=1} END{exit !found}' "$EGL_MAP"
+}
+
+start_servers() {
+    tmux has-session -t "$SESSION" 2>/dev/null || tmux new-session -d -s "$SESSION" -n idle
+    mkdir -p runs/_servers
+    _srv() {  # name, then command
+        local name="$1"; shift
+        tmux new-window -t "$SESSION" -n "srv-$name" \
+            "cd $REPO && DATE_TAG=$DATE_TAG bash scripts/serve_supervised.sh $name $*; read"
+        echo "  started server: $name"
+    }
+    _srv dreamzero   "env GPUS=0 DIT_SPLIT=0 PORT=5000 bash scripts/serve_dreamzero.sh"
+    _srv molmoact2   "env GPU=2 PORT=8000 bash scripts/serve_molmoact2.sh"
+    _srv m2t2        "env GPU=2 PORT=8123 bash scripts/serve_m2t2.sh"
+    # TiPToP must run from the REPO ROOT: with cwd=third_party/tiptop, sys.path[0] contains a
+    # cutamp/ directory with no __init__.py, which shadows the installed editable package as a
+    # PEP 420 namespace package and fails startup with a misleading "cuTAMP version mismatch".
+    _srv tiptop      "env CUDA_VISIBLE_DEVICES=2 $ENVS/mlspaces-tiptop/bin/python -m tiptop.tiptop_websocket_server --port 18765"
+    _srv openpi_pi05 "env GPU=3 PORT=8080 CONFIG=pi05_droid_jointpos bash scripts/serve_openpi.sh"
+    _srv openpi_pi0  "env GPU=3 PORT=8081 CONFIG=pi0_droid_jointpos  bash scripts/serve_openpi.sh"
+    echo
+    echo "Servers starting. Wait for all 7 ports before launching lanes:"
+    echo "  bash scripts/launch_campaign.sh wait-servers"
+}
+
+wait_servers() {
+    local ports="8080 8081 8000 18765 5000 8003 8004 8123"
+    echo "waiting for: $ports"
+    while :; do
+        local down=""
+        for p in $ports; do
+            (exec 3<>/dev/tcp/127.0.0.1/"$p") 2>/dev/null && exec 3<&- || down="$down $p"
+        done
+        [ -z "$down" ] && { echo "all servers up"; return 0; }
+        echo "  still down:$down"
+        sleep 30
+    done
+}
+
+start_lanes() {
+    local group="${1:-all}"
+    mkdir -p runs/_lanes
+    for spec in "${LANES[@]}"; do
+        set -- $spec
+        local policy="$1" gpu="$2" numa="$3"
+        local egl; egl="$(egl_for "$gpu")"
+        [ -n "$egl" ] || { echo "could not resolve EGL id for GPU $gpu; run scripts/probe_egl_mapping.py" >&2; exit 1; }
+        # Assert the table's NUMA node against reality rather than trusting it.
+        local actual_numa; actual_numa="$(numa_for_gpu "$gpu")"
+        if [ -n "$actual_numa" ] && [ "$actual_numa" != "$numa" ]; then
+            echo "GPU $gpu is on NUMA node $actual_numa, not $numa as this script's LANES table says" >&2
+            exit 1
+        fi
+        local cpus; cpus="$(cpus_for_node "$numa")"
+        local pin=""; [ -n "$cpus" ] && pin="taskset -c $cpus"
+        tmux new-window -t "$SESSION" -n "lane-$policy" \
+          "cd $REPO && source $HOME/anaconda3/etc/profile.d/conda.sh && \
+           LANE_GPU=$gpu MUJOCO_EGL_DEVICE_ID=$egl DATE_TAG=$DATE_TAG \
+           $pin bash scripts/run_full_matrix.sh $policy all $group 2>&1 | tee -a runs/_lanes/${policy}_${DATE_TAG}.log; read"
+        echo "  lane $policy -> GPU $gpu (EGL $egl, NUMA $numa cpus=${cpus:-unpinned}), group=$group"
+        sleep 60   # stagger: seven simultaneous model warmups thrash the HF cache and the PCIe bus
+    done
+}
+
+case "${1:-}" in
+    servers)      start_servers ;;
+    wait-servers) wait_servers ;;
+    lanes)        start_lanes "${2:-all}" ;;
+    status)       python3 scripts/campaign_status.py --date "$DATE_TAG" ;;
+    *) echo "usage: $0 {servers|wait-servers|lanes [all|group-a|group-b]|status}" >&2; exit 2 ;;
+esac

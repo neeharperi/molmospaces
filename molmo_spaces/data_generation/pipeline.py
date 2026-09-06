@@ -378,6 +378,17 @@ def house_processing_worker(
     # Create worker-specific logger
     worker_logger = get_worker_logger(worker_id)
 
+    # Publish this worker's index into its own environment so a remote-policy client can shard
+    # across several server instances of the same policy. Workers are separate processes, so
+    # this is process-local and cannot leak between them.
+    #
+    # Why this is needed: the slowest policies here are bottlenecked on a server that serves one
+    # inference at a time, so extra eval workers add queueing rather than throughput (DreamZero
+    # at 4 workers produced 660 handshake timeouts and lost 5 episodes). Running N server
+    # instances and giving each worker its own is the fix, and the client needs to know which
+    # one it owns. See molmo_spaces/policy/learned_policy/utils.py's shard_port().
+    os.environ["MLSPACES_WORKER_ID"] = str(worker_id)
+
     # Create per-worker profiler for timing analysis
     if hasattr(exp_config, "datagen_profiler") and exp_config.datagen_profiler:
         datagen_profiler = DatagenProfiler(logger=worker_logger, enabled=True)

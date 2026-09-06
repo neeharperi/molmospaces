@@ -1,6 +1,7 @@
 from molmo_spaces.configs.policy_configs import BasePolicyConfig
 from molmo_spaces.policy.base_policy import PolicyFactory
 from molmo_spaces.utils.function_utils import make_lenient
+import os
 
 
 class PiPolicyConfig(BasePolicyConfig):
@@ -11,6 +12,9 @@ class PiPolicyConfig(BasePolicyConfig):
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     chunk_size: int = 8
+    # [exo_camera_key, wrist_camera_key]. eval_main.py's --camera_names override writes here;
+    # PI_Policy.obs_to_model_input reads it when it differs from this default.
+    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
 
     policy_cls: type = None
     policy_factory: PolicyFactory | None = None
@@ -26,9 +30,99 @@ class PiPolicyConfig(BasePolicyConfig):
             self.policy_factory = make_lenient(PI_Policy)
 
 
+class Pi0PolicyConfig(PiPolicyConfig):
+    """pi0-DROID. Identical wiring to pi0.5 -- same PI_Policy wrapper, same openpi
+    websocket protocol, same joint-position action space -- so only the checkpoint and the
+    port differ. A separate port (not 8080) because both servers run concurrently: the
+    campaign evaluates pi0 and pi0.5 in parallel lanes, and eval_main.py has no CLI override
+    for remote_config.port, so the distinction has to live in the config.
+    """
+
+    checkpoint_path: str = "third_party/openpi/checkpoints/pi0_droid_jointpos"
+    remote_config: dict | None = dict(host="localhost", port=8081)
+    # chunk_size is inherited (8) and that is deliberate, but it is worth stating why rather
+    # than leaving it to look like a copy-paste. The two checkpoints do NOT share an action
+    # horizon: openpi registers pi0_droid_jointpos with action_horizon=10 and
+    # pi05_droid_jointpos with 15 (src/openpi/training/config.py:1043 and :684). chunk_size is
+    # how many of each returned chunk PI_Policy executes before re-querying, so it must stay
+    # <= the horizon -- executing a chunk longer than the model returns is exactly the failure
+    # that silently cost MolmoAct2 5 of every 15 actions (see docs/eval_reproduction.md).
+    # 8 <= 10, so this is safe, and keeping it equal to pi0.5's means the two lanes differ
+    # only by the checkpoint, which is the comparison we actually want.
+
+
+class MolmoAct2PolicyConfig(BasePolicyConfig):
+    checkpoint_path: str = "allenai/MolmoAct2-DROID"
+    remote_config: dict | None = dict(host="localhost", port=8000)
+    grasping_type: str = "binary"
+    grasping_threshold: float = 0.5
+    # `num_steps` is the flow-matching *integration* step count sent to the server (a
+    # sampler-quality/compute knob forwarded straight to predict_action(); the server's own
+    # DEFAULT_NUM_STEPS is 10). It is NOT the action-chunk length -- an earlier version of
+    # this config conflated the two, which silently capped the executed chunk at 10.
+    num_steps: int = 10
+    # How many actions of each returned chunk to execute open-loop before re-querying. The
+    # checkpoint's own norm_stats.json declares `action_horizon: 15` / `n_action_steps: 15`
+    # under the franka_droid tag, and the policy zoo's closest analogue
+    # (MolmoBotDroidPolicyConfig) likewise carries this as its own separate `action_horizon`
+    # field rather than reusing a sampler knob.
+    action_horizon: int = 15
+    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
+
+    policy_cls: type = None
+    policy_factory: PolicyFactory | None = None
+    policy_type: str = "learned"
+
+    def model_post_init(self, __context) -> None:
+        """Set policy_cls after initialization to avoid circular imports."""
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.learned_policy.molmoact2_policy import MolmoAct2Policy
+
+            self.policy_cls = MolmoAct2Policy
+            self.policy_factory = make_lenient(MolmoAct2Policy)
+
+
+
+class TiptopPolicyConfig(BasePolicyConfig):
+    """Ported from allenai/molmospaces_policy_zoo's molmospaces_zoo/tiptop/config.py."""
+
+    policy_type: str = "tamp"
+    # 18765, not upstream's 8765 -- another user on this shared host holds 8765. See the
+    # note in scripts/eval_common.py's POLICIES table.
+    remote_config: dict = dict(host="localhost", port=18765, max_retries=5)
+
+    # TiPToP requires depth from the wrist camera.
+    force_enable_depth: bool = True
+
+    # Arm moves here before the image capture that is sent to the TiPToP server.
+    # Set to a list of 7 joint angles (radians) to enable; None disables the feature.
+    cam_obs_qpos: list[float] | None = None
+    # Number of interpolation steps to reach cam_obs_qpos (each step = one policy dt).
+    cam_obs_n_steps: int = 200
+
+    policy_cls: type = None
+    policy_factory: PolicyFactory | None = None
+
+    def model_post_init(self, __context) -> None:
+        """Set policy_cls after initialization to avoid circular imports."""
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.learned_policy.tiptop_policy import TiptopPolicy
+
+            self.policy_cls = TiptopPolicy
+            self.policy_factory = make_lenient(TiptopPolicy)
+
+
 class DreamZeroPolicyConfig(BasePolicyConfig):
     checkpoint_path: str = "checkpoints/dreamzero"
-    remote_config: dict = dict(host="localhost", port=0000)
+    # Fan-out: each DreamZero worker needs its OWN server, because the server keeps a
+    # single _current_session_id and interleaving episodes would wipe the AR frame
+    # history (see docs/eval_reproduction.md). DREAMZERO_PORT selects which one.
+    # No-op unless DREAMZERO_PORT is set.
+    remote_config: dict = dict(
+        host="localhost", port=int(os.environ.get("DREAMZERO_PORT", "5000"))
+    )
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     chunk_size: int = 24

@@ -1,0 +1,70 @@
+Blackwell (sm_120) support and a live-checkpoint API fix for the MolmoAct2-DROID server.
+
+1. examples/droid/host_server_droid.py -- the vendored script calls predict_action(...,
+   action_mode="continuous"), but the LIVE allenai/MolmoAct2-DROID remote code (fetched via
+   trust_remote_code=True, NOT pinned by this submodule) renamed that parameter to
+   `inference_action_mode` and raises if it is omitted. Confirmed by reading the downloaded
+   modeling_molmoact2.py directly; note this contradicts third_party/molmoact2/CLAUDE.md,
+   which is stale on this point.
+
+2. pyproject.toml -- torch was pinned to 2.5.1+cu121, which has ZERO Blackwell kernels
+   (torch.cuda.get_arch_list() omits sm_120; inference dies with "no kernel image is
+   available for execution on the device"). Bumped to torch 2.7.1 / torchvision 0.22.1 on
+   the cu128 wheel index, which does ship sm_120.
+
+Base commit: 5aac8f8a1180d79757ce500f819a02217079811c
+
+diff --git a/examples/droid/host_server_droid.py b/examples/droid/host_server_droid.py
+index 4a0abb7..f2c5a7c 100644
+--- a/examples/droid/host_server_droid.py
++++ b/examples/droid/host_server_droid.py
+@@ -205,7 +205,7 @@ class Policy:
+                 task=instruction,
+                 state=state_f32,
+                 norm_tag=NORM_TAG,
+-                action_mode="continuous",
++                inference_action_mode="continuous",
+                 enable_depth_reasoning=False,
+                 num_steps=num_steps,
+                 normalize_language=True,
+diff --git a/pyproject.toml b/pyproject.toml
+index 3cbfd8e..2d8fff7 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -5,8 +5,8 @@ description = "MolmoAct2 inference server (FastAPI)"
+ readme = "README.md"
+ requires-python = ">=3.11,<3.13"
+ dependencies = [
+-    "torch==2.5.1",
+-    "torchvision==0.20.1",
++    "torch==2.7.1",
++    "torchvision==0.22.1",
+     "transformers>=4.57,<4.58",
+     "accelerate>=1.0",
+     "safetensors>=0.4",
+@@ -28,14 +28,19 @@ dependencies = [
+ ]
+ 
+ [tool.uv]
+-# Resolve CUDA-12.1 PyTorch wheels from the official PyTorch index.
+-extra-index-url = ["https://download.pytorch.org/whl/cu121"]
++# cu121 wheels have no Blackwell (sm_120) kernels at all -- confirmed via
++# `torch.cuda.get_arch_list()` on this RTX PRO 5000 Blackwell machine, which raised
++# "CUDA error: no kernel image is available for execution on the device" under cu121
++# (and even cu126, used elsewhere in this project, doesn't list sm_120). cu128 is the
++# minimum PyTorch build with Blackwell support; bumped from the original cu121/torch==2.5.1
++# pin. See docs/eval_reproduction.md for the verification.
++extra-index-url = ["https://download.pytorch.org/whl/cu128"]
+ 
+ [tool.uv.sources]
+-torch = { index = "pytorch-cu121" }
+-torchvision = { index = "pytorch-cu121" }
++torch = { index = "pytorch-cu128" }
++torchvision = { index = "pytorch-cu128" }
+ 
+ [[tool.uv.index]]
+-name = "pytorch-cu121"
+-url = "https://download.pytorch.org/whl/cu121"
++name = "pytorch-cu128"
++url = "https://download.pytorch.org/whl/cu128"
+ explicit = true

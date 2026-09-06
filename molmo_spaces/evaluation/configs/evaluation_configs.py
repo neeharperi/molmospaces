@@ -26,6 +26,7 @@ is strictly authoritative for episode initialization.
 """
 
 from __future__ import annotations
+import os
 
 import datetime
 from pathlib import Path
@@ -35,8 +36,11 @@ from molmo_spaces.configs.policy_configs import BrownianMotionPolicyConfig, Dumm
 from molmo_spaces.configs.policy_configs_baselines import (
     CAPPolicyConfig,
     DreamZeroPolicyConfig,
+    MolmoAct2PolicyConfig,
+    Pi0PolicyConfig,
     PiPolicyConfig,
     TeleopPolicyConfig,
+    TiptopPolicyConfig,
 )
 from molmo_spaces.configs.robot_configs import (
     ActionNoiseConfig,
@@ -198,6 +202,61 @@ class PiPolicyEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context):
         super().model_post_init(__context)
         self.robot_config.action_noise_config.enabled = False
+
+
+class Pi0PolicyEvalConfig(JsonBenchmarkEvalConfig):
+    """pi0-DROID. Same control rate and episode-termination semantics as pi0.5: both are
+    openpi DROID checkpoints in the same joint-position action space, served by the same
+    script from the same venv, so there is no reason for the harness side to differ.
+    """
+
+    robot_config: FrankaRobotConfig = FrankaRobotConfig()
+    policy_config: Pi0PolicyConfig = Pi0PolicyConfig()
+    policy_dt_ms: float = 66.0  # ~15hz
+    end_on_success: bool = True
+
+    def model_post_init(self, __context):
+        super().model_post_init(__context)
+        self.robot_config.action_noise_config.enabled = False
+
+
+class MolmoAct2PolicyEvalConfig(JsonBenchmarkEvalConfig):
+    robot_config: FrankaRobotConfig = FrankaRobotConfig()
+    policy_config: MolmoAct2PolicyConfig = MolmoAct2PolicyConfig()
+    # 66ms (~15Hz), matching PiPolicyEvalConfig and -- more to the point -- the policy zoo's
+    # MolmoBotDroidEvalConfig, the closest available analogue (Ai2's own DROID VLA, same
+    # benchmark, same harness) which also uses 66.0.
+    #
+    # This was originally set to 200.0 (~5Hz) on the strength of host_server_droid.py's own
+    # comment that "real-robot clients poll at ~5 Hz". That comment is about real-robot
+    # deployment and its CUDA-graph concurrency lock, NOT the rate this benchmark should
+    # drive the policy at, and taking it as the latter made MolmoAct2 underperform the
+    # leaderboard on every task measured (Pick-v1.5 16.0% vs 43.4%, Pick-v2-classic 0.0% vs
+    # 20.5%, Open-v1 2.5% vs 11.7%, Close-v1 54.3% vs 71.26%). See
+    # docs/eval_reproduction.md.
+    policy_dt_ms: float = 66.0  # ~15hz
+    end_on_success: bool = True
+
+    def model_post_init(self, __context):
+        super().model_post_init(__context)
+        self.robot_config.action_noise_config.enabled = False
+
+
+
+
+class TiptopEvalConfig(JsonBenchmarkEvalConfig):
+    """Ported from allenai/molmospaces_policy_zoo's molmospaces_zoo/tiptop/config.py."""
+
+    robot_config: FrankaRobotConfig = FrankaRobotConfig(
+        action_noise_config=ActionNoiseConfig(enabled=False)
+    )
+    policy_config: TiptopPolicyConfig = TiptopPolicyConfig(
+        # Pose the arm moves to at the start of the trajectory so the wrist camera has a
+        # clear view of the scene before the observation is sent to the TiPToP server.
+        cam_obs_qpos=[0.0, -1.0, 0.0, -1.0, 0.0, 1.0, -3.0],
+        cam_obs_n_steps=200,
+    )
+    policy_dt_ms: float = 20.0
 
 
 class CAPPolicyEvalConfig(JsonBenchmarkEvalConfig):

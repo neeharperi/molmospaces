@@ -1,0 +1,33 @@
+Raise the M2T2 client timeout on TiPToP's async grasp path from 30s to 500s.
+
+Base commit: d8f5afdaa94a7432220c3042f9f80be5ab45aae8 (tiptop v0.3.0)
+
+Why: tiptop/perception/m2t2.py's synchronous helper already uses timeout=500, but the async
+path that the websocket server actually uses caps at 30s. On this host M2T2 shares a GPU with
+whichever policy server is running, and measured planning calls have exceeded 120s under that
+contention. A timeout there is not loud: generate_grasps_async's caller converts the failure
+into a well-formed planning result with success=False, which is indistinguishable from a
+policy that simply failed the episode. That is the same benign-no-op design that hid the
+missing-M2T2-server bug for a full matrix (docs/eval_reproduction.md's TiPToP section) -- so
+the failure mode this guards against is silent score depression, not a crash.
+
+Applied by scripts/apply_third_party_patches.sh tiptop.
+
+diff --git a/tiptop/perception/m2t2.py b/tiptop/perception/m2t2.py
+index 8acef2f..ef6c859 100644
+--- a/tiptop/perception/m2t2.py
++++ b/tiptop/perception/m2t2.py
+@@ -130,7 +130,12 @@ async def generate_grasps_async(
+     endpoint = os.path.join(server_url.rstrip("/"), "predict")
+ 
+     _log.debug(f"Sending inference request to M2T2 server at {endpoint}")
+-    async with session.post(endpoint, json=payload, timeout=aiohttp.ClientTimeout(total=30.0)) as response:
++    # 30s is far too tight when M2T2 shares a GPU with a policy server: measured M2T2 calls
++    # here run 4s typically but have exceeded 120s under contention, and a timeout does not
++    # raise -- generate_grasps_async's caller turns it into a well-formed success=False plan,
++    # so the policy silently degrades instead of failing. Matched to the synchronous path's
++    # own timeout=500 a few lines above, which upstream already considers reasonable.
++    async with session.post(endpoint, json=payload, timeout=aiohttp.ClientTimeout(total=500.0)) as response:
+         result = await response.json()
+ 
+     outputs = _process_m2t2_response(result, num_grasps)

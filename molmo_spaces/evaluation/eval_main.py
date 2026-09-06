@@ -135,6 +135,7 @@ _assert_data_versions_match()
 if TYPE_CHECKING:
     from molmo_spaces.policy.base_policy import BasePolicy
 
+logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
 
