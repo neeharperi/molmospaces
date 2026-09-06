@@ -2842,3 +2842,34 @@ examined and both rejected:
 So the 63-cell matrix is a **~3.5 week** job from here, set by DreamZero, with tiptop close
 behind. All four GPUs are at 95-100% utilization, so there is no idle capacity left to buy
 this back -- the remaining levers are scope, not scheduling.
+
+## 2026-09-06 -- what NVIDIA's own docs say about Nano's prompt format
+
+The Cosmos 3 technical report (arXiv:2606.02800) was finally read, via ar5iv/HTML after the
+PDF exceeded the fetch size limit. Both renderings truncate before section 4.2.5 ("Robot
+Policy Post-Training"), so the report yields no inference-time detail: no prompt format, no
+chunk size, no control rate, no camera configuration, no guidance settings. The only relevant
+figure is Table 1's `Cosmos3-Nano-Policy-DROID: 39.7*` (post-trained), against an unnamed
+benchmark. Not usable as a reference number.
+
+The **model card for `nvidia/Cosmos3-Nano-Policy-DROID` is more useful, and it cuts against
+the JSON hypothesis.** Its documented serving invocation is
+
+    python -m cosmos_framework.scripts.action_policy_server_robolab --port 8000
+
+with **no `--format-prompt-as-json` flag**, and it describes the text input as "plain language
+instructions". It also confirms Nano is **16B** and reports the checkpoint as #1 on the
+**RoboArena** leaderboard -- a different benchmark from MolmoSpaces.
+
+So `scripts/serve_cosmos.sh` is already consistent with NVIDIA's documented invocation: it
+keys `--format-prompt-as-json True` off `CKPT` and passes it for Edge only. The tension is
+now between two NVIDIA sources, not between our config and NVIDIA's:
+
+  * `action_policy_droid_nano.py:219` -- the vendored DROID *training* recipe sets
+    `format_prompt_as_json=True`
+  * the model card -- documents plain text at *serving* time, with no flag
+
+That is precisely what the running A/B settles empirically, and it is a better arbiter than
+either document. **Do not pre-emptively re-run any cosmos_nano cell on the JSON assumption**;
+the prior on that fix should now be low, and arm A (plaintext) matches both the model card and
+the current campaign configuration.
