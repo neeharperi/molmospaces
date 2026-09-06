@@ -281,6 +281,25 @@ def main() -> None:
     if failures:
         print(f"\n{len(failures)}/{len(all_rows)} evaluated cells FAILED.")
 
+    # Two different denominators keep getting conflated in progress reports, so print both.
+    # Matrix completion counts all 7x9 cells; verification counts only those with a
+    # leaderboard row to match against. They are not the same job: several policies were run
+    # for matrix completeness and have no published entry (cosmos_edge has none at all, pi0
+    # and dreamzero have Group A only), so GPU time spent on those cells yields zero verdicts.
+    n_verdicted = len(per_task_rows)
+    n_comparable = n_verdicted + len(missing)
+    print(
+        f"\nverification: {n_verdicted}/{n_comparable} leaderboard-comparable cells verdicted"
+        f"  |  matrix: see scripts/lane_health.py for what is still running"
+    )
+    if missing:
+        by_policy = {}
+        for policy, task in missing:
+            by_policy.setdefault(policy, []).append(task)
+        print("  remaining verdicts blocked on: " + ", ".join(
+            f"{p} x{len(t)}" for p, t in sorted(by_policy.items())
+        ))
+
     if args.require_full_matrix or args.require_group_b:
         # The only difference between the two gates is which task set has to be complete; the
         # Group B pooled aggregate is required either way, since it is the load-bearing check.
