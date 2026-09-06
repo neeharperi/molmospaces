@@ -3201,3 +3201,38 @@ larger time budget:
 
 The per-category prediction stands and now has a sharper reading: whichever arm wins should
 lift the narrow/upright categories specifically.
+
+### Direct check on the horizon hypothesis: not confirmed
+
+The horizon story predicts our Cosmos episodes are being cut off. That is checkable in the
+trajectories we already have, without waiting for the A/B. Reading `rewards` length and the
+`success` flag per episode on Pick-v1.5 (n=229 each):
+
+| policy | success-episode length (median) | FAILED-episode length | fraction of failures at max |
+|---|---|---|---|
+| cosmos_nano | 26 | **39** | 100% |
+| cosmos_edge | 18 | **39** | 100% |
+| pi05_droid | 22 | **39** | 100% |
+| molmoact2 | 9 | 22 | 100% |
+
+Every failing episode in every policy ends at exactly that policy's maximum length, so a hard
+cap is certainly what ends failures -- but **cosmos and pi05 share the same cap of 39**, and
+pi05 reproduces its leaderboard entry while cosmos does not. Within our harness Cosmos is
+therefore *not* being uniquely starved of policy steps.
+
+(Two false starts on the way: `truncated` is definitionally equal to failure here -- 100% of
+failures for every policy, including passing ones -- so it carries no information. And
+`actions` is an h5 *group*, not an array, so an initial length measurement of "5" was the
+subkey count, not the trajectory length.)
+
+**What this does to the hypothesis.** The claim in the previous entry -- that cosmos runs 17
+seconds short of the budget its row was measured under -- now rests entirely on the
+dt-to-seconds conversion, not on any observed truncation difference. Our cosmos and our pi05
+consume the same number of policy steps; the argument that cosmos is short-changed survives
+only if the reference's dt 0.1 meant its equivalent budget covered 1.5x more simulated time.
+That is a real possibility and it is exactly what arm `timeonly` (dt 66, 750 steps) tests,
+but it is a weaker claim than the previous entry implied, and the supporting evidence is
+circumstantial rather than direct.
+
+The geometry signature and the Edge~Nano result are unaffected -- they stand on their own and
+remain the strongest facts in this investigation.
