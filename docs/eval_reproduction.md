@@ -2732,3 +2732,72 @@ compare jerk across the two pipelines without first calibrating on a policy whos
 success rates already agree.
 
 This is the eighth eliminated Cosmos hypothesis. The gap stands.
+
+### Twelfth Cosmos hypothesis: the client/server contract is clean; the reference is out of family
+
+A full audit of the Cosmos preprocessing chain (server transforms, image canvas
+construction, prompt JSON, action post-processing, tokenization) against what
+cosmos_policy.py sends found no defect that could cost 3-4x. Two corrections to
+earlier entries in this document:
+
+  - The "could not load training config" warning is EXPECTED, not a fault. The
+    released checkpoints ship checkpoint.json with config_file: null, so the
+    fallback ActionTransformPipeline is the intended serving path and its defaults
+    match the training recipe.
+  - The action-contract elimination was right, but for the wrong reason. The DROID
+    policy recipe trains with action_normalization=None (raw joint radians), so the
+    server having no action_normalizer is correct behaviour rather than an omission.
+
+Two genuine train/serve deltas exist and neither is a shared root cause: the
+`idle_frame` prompt field is never populated by the reference server (so it is absent
+for everyone, not just us), and Nano is served without JSON prompts while the only
+in-tree DROID recipe sets format_prompt_as_json=True. Edge fails identically WITH
+JSON on, so no single prompt story covers both checkpoints.
+
+WHAT THE REFERENCE ROW LOOKS LIKE, fetched live 2026-09-05 and verified directly:
+
+  | task            | cosmos | pi05  | tiptop | cosmos/pi05 |
+  |-----------------|--------|-------|--------|-------------|
+  | Pick-v1.5       |  66.5  | 18.05 |  57.9  |  3.7x       |
+  | Pick-v2-classic |  32.3  |  6.38 |  40.9  |  5.1x       |
+  | Pick-v2-filament|  32.2  |  7.01 |  37.3  |  4.6x       |
+  | Pick-v2-RandCam |  25.7  |  7.96 |  37.4  |  3.2x       |
+  | PnP-v2          |  26.0  |  8.13 |  24.7  |  3.2x       |
+  | PnP-NextTo-v2   |  22.9  |  7.45 |  28.7  |  3.1x       |
+  | PnP-Color-v2    |  34.3  |  6.66 |  24.9  |  5.2x       |
+
+The reference cosmos beats pi05 by 3.1-5.2x on every Group B task and beats TiPToP --
+a TAMP pipeline with privileged M2T2 grasp proposals and Gemini scene understanding --
+on three of them. Our cosmos (33.8% Pick-v1.5) sits between our pi05 (23.3%) and our
+tiptop (62.0%), i.e. inside the learned-policy family.
+
+Two further measurements say our run is the same policy at a lower completion rate,
+not a broken one: per-category success profiles correlate between our run and the
+reference (Spearman rho = 0.59 on Pick-v1.5, n=18 categories -- Fruit is the floor in
+both, Mug/Bowl/Cup top in both), and the cosmos/pi05 RELATIVE jerk ratio is 0.57 on
+the leaderboard against 0.56 in ours.
+
+Conclusion: after twelve eliminated hypotheses the evidence points at the reference
+row, not the harness. The decisive next step is provenance, not experiment -- what
+produced `/tmp/cosmos3_csv`, and from which checkpoint. No amount of GPU time here
+answers that.
+
+### The leaderboard has been revised since the frozen snapshot
+
+Re-fetched live on 2026-09-05 against the 2026-08-17..19 snapshot:
+
+  tiptop     all 7 Group B tasks   -4.7 to -11.2pp
+  pi05       3 PnP tasks           -2.8 to -3.9pp
+  cosmos     unchanged
+  molmoact2  slug now 404s; its data moved to the `molmoact` slug
+
+The revisions are one-directional and make our results look BETTER, and cosmos --
+the one policy we cannot reproduce -- was not revised.
+
+DECISION: reference/leaderboard_snapshot.csv stays the primary comparison basis.
+It is the frozen reference captured when the campaign began, and the whole provenance
+system (pinned assets, recorded SHAs, per-cell provenance.json) exists to keep results
+stable and re-derivable. Swapping the comparison basis mid-campaign would mean cells
+completed on different days were scored against different references.
+reference/leaderboard_snapshot_20260905.csv is committed alongside it as a secondary
+check; pass --leaderboard to compare against either.
