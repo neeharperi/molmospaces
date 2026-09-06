@@ -38,6 +38,11 @@ run_arm() {  # $1 = label   $2 = extra server args
   exec 3<&-
   sleep 5
   local elog="runs/_servers/cosmos_nano_json_ab_${arm}_client.log"
+  # eval.py keeps its detailed log in the CELL directory and only prints summary lines to
+  # stdout, so the connection line the port gate looks for never reaches $elog. Grep the
+  # cell log instead; $elog is kept only for the final tail.
+  local clog="runs/cosmos_nano/$TASK/_ab_nanojson_${arm}/eval_stdout.log"
+  rm -f "$clog"
   COSMOS_PORT=$PORT LANE_GPU=$GPU MUJOCO_EGL_DEVICE_ID=$EGL \
     conda run -n mlspaces-classic --no-capture-output \
       python scripts/eval.py --policy cosmos_nano --task "$TASK" \
@@ -51,13 +56,13 @@ run_arm() {  # $1 = label   $2 = extra server args
   # identical arms would have come back as a clean null. Gate early and loudly instead.
   local ok=""
   for _ in $(seq 1 90); do
-    grep -q "Cosmos model at localhost:$PORT" "$elog" 2>/dev/null && { ok=port; break; }
-    grep -qE "Cosmos model at localhost:(8003|8004)" "$elog" 2>/dev/null && { ok=wrong; break; }
+    grep -q "Cosmos model at localhost:$PORT" "$clog" 2>/dev/null && { ok=port; break; }
+    grep -qE "Cosmos model at localhost:(8003|8004)" "$clog" 2>/dev/null && { ok=wrong; break; }
     kill -0 $evalpid 2>/dev/null || break
     sleep 10
   done
   if [ "$ok" != port ]; then
-    echo "  !! arm $arm ABORTED: client not on :$PORT (saw: $(grep -o 'localhost:[0-9]*' "$elog" | tail -1))"
+    echo "  !! arm $arm ABORTED: client not on :$PORT (saw: $(grep -o 'localhost:[0-9]*' "$clog" 2>/dev/null | tail -1))"
     kill $evalpid 2>/dev/null; pkill -f "_ab_nanojson_$arm" 2>/dev/null
     pkill -f "serve_cosmos_policy.py .*--port $PORT" 2>/dev/null
     return 1
