@@ -83,40 +83,6 @@ class MolmoAct2PolicyConfig(BasePolicyConfig):
             self.policy_factory = make_lenient(MolmoAct2Policy)
 
 
-class CosmosPolicyConfig(BasePolicyConfig):
-    # Default to Edge (4B, faster); switch to Nano (16B) by pointing checkpoint_path at
-    # "nvidia/Cosmos3-Nano-Policy-DROID" and remote_config at cosmos_nano's port instead --
-    # see docs/eval_reproduction.md for why these are two separate registered policies, not
-    # a single one with a variant flag.
-    checkpoint_path: str = "nvidia/Cosmos3-Edge-Policy-DROID"
-    # Port overridable for auditing against a dedicated server instance, so an A/B does not
-    # queue behind the campaign lane on the shared one. No-op unless COSMOS_PORT is set.
-    remote_config: dict | None = dict(
-        host="localhost", port=int(os.environ.get("COSMOS_PORT", "8003"))
-    )
-    grasping_type: str = "binary"
-    grasping_threshold: float = 0.5
-    # The server's own action_chunk_size defaults to 32; re-querying at 8 (matching pi0.5's
-    # own chunk_size and the tuning already validated for this exact checkpoint family in a
-    # sibling project) limits open-loop drift without needing every chunk step.
-    # Overridable for auditing without editing configs mid-campaign. Defaults to 8, so this
-    # is a no-op unless COSMOS_CHUNK_SIZE is set: the campaign's running lanes are unaffected.
-    chunk_size: int = int(os.environ.get("COSMOS_CHUNK_SIZE", "8"))
-    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
-
-    policy_cls: type = None
-    policy_factory: PolicyFactory | None = None
-    policy_type: str = "learned"
-
-    def model_post_init(self, __context) -> None:
-        """Set policy_cls after initialization to avoid circular imports."""
-        super().model_post_init(__context)
-        if self.policy_cls is None:
-            from molmo_spaces.policy.learned_policy.cosmos_policy import Cosmos_Policy
-
-            self.policy_cls = Cosmos_Policy
-            self.policy_factory = make_lenient(Cosmos_Policy)
-
 
 class TiptopPolicyConfig(BasePolicyConfig):
     """Ported from allenai/molmospaces_policy_zoo's molmospaces_zoo/tiptop/config.py."""

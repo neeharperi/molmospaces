@@ -44,7 +44,7 @@ mkdir -p "$CLAIMS" runs/_lanes runs/_servers
 
 # GPU -> the lanes that must finish before that GPU is free (from launch_campaign.sh).
 # GPU 0 is DreamZero's own card and is never claimable here.
-gpu_owners() { case "$1" in 1) echo "cosmos_nano cosmos_edge";; 2) echo "molmoact2_droid tiptop";; 3) echo "pi05_droid pi0_droid";; *) echo "";; esac; }
+gpu_owners() { case "$1" in 1) echo "";; 2) echo "molmoact2_droid tiptop";; 3) echo "pi05_droid pi0_droid";; *) echo "";; esac; }
 
 # GPU3 IS THE FILAMENT CARD AND IS PERMANENTLY OFF LIMITS TO THE FAN-OUT.
 # Filament rendering is not steerable: it ignores MUJOCO_EGL_DEVICE_ID and

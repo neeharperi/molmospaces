@@ -53,8 +53,6 @@ CELLS=(
   "molmoact2_droid:2:Pick-v2-classic:PnP-NextTo-v2"
   "tiptop:2:Pick-v2-classic:PnP-NextTo-v2"
   "dreamzero:0:Open-v1,Close-v1:"
-  "cosmos_edge:1:Pick-v2-classic:PnP-NextTo-v2"
-  "cosmos_nano:1:Pick-v2-classic:PnP-NextTo-v2"
 )
 
 mkdir -p runs/_lanes

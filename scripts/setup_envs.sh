@@ -5,7 +5,6 @@
 #                           Pick-v1.5, Pick-v2-classic)
 #   mlspaces-filament       eval harness, filament renderer        (the other 5 tasks)
 #   mlspaces-molmoact2      MolmoAct2-DROID policy server (:8000)
-#   mlspaces-cosmos-policy  Cosmos3-{Edge,Nano}-Policy-DROID server (:8003/:8004)
 #   mlspaces-tiptop         TiPToP planning server (:8765), PyTorch + cuRobo + cuTAMP
 #   mlspaces-m2t2           M2T2 grasp server (:8123), hard dependency of mlspaces-tiptop
 #   mlspaces-dreamzero      DreamZero-DROID policy server (:5000)
@@ -63,15 +62,10 @@ TIPTOP_SHA="d8f5afdaa94a7432220c3042f9f80be5ab45aae8"      # third_party/tiptop 
 CUROBO_SHA="b5fad1df2a3ac4d3e33e369918b7d62d0e59ebd1"
 CUTAMP_SHA="e206ab817599406abd709e8ba19f445889bd641c"      # == tag v0.0.6
 M2T2_SHA="401d3f65ba4cecadebd8c7113aa347c1a051b684"
-COSMOS_SHA="c14617c2bc93dacbf69674fb964eec93182933d9"
 
 CUROBO_REPO="https://github.com/williamshen-nz/curobo.git"   # fork; upstream cuRobo will not do
 CUTAMP_REPO="https://github.com/tiptop-robot/cuTAMP.git"
 M2T2_REPO="https://github.com/williamshen-nz/m2t2-private.git"
-# The DROID-trained checkpoints and their server live in cosmos-framework, NOT in
-# nvlabs/cosmos-policy (which the checkpoint family name suggests and which ships no
-# DROID-trained weights at all). See docs/eval_reproduction.md's Cosmos section.
-COSMOS_REPO="https://github.com/NVIDIA/cosmos-framework.git"
 
 CUTAMP_VER="0.0.6"      # tiptop/utils.py asserts this exact version at import
 TORCH_CU129="https://download.pytorch.org/whl/cu129"
@@ -97,7 +91,7 @@ export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0}"
 export EXPECTED_SM="${EXPECTED_SM:-sm_90}"
 
 ALL_TARGETS=(mlspaces-classic mlspaces-filament mlspaces-molmoact2 mlspaces-m2t2
-             mlspaces-tiptop mlspaces-dreamzero mlspaces-cosmos-policy openpi)
+             mlspaces-tiptop mlspaces-dreamzero openpi)
 
 CHECK_ONLY=0
 TARGETS=()
@@ -105,7 +99,7 @@ for a in "$@"; do
     case "$a" in
         --check) CHECK_ONLY=1 ;;
         mlspaces-classic|mlspaces-filament|mlspaces-molmoact2|mlspaces-m2t2|mlspaces-tiptop|\
-mlspaces-dreamzero|mlspaces-cosmos-policy|openpi) TARGETS+=("$a") ;;
+mlspaces-dreamzero|openpi) TARGETS+=("$a") ;;
         *) echo "unknown argument: $a" >&2; exit 2 ;;
     esac
 done
@@ -398,88 +392,6 @@ setup_dreamzero() {
     bash scripts/apply_third_party_patches.sh dreamzero
 }
 
-# ---------------------------------------------------------------- mlspaces-cosmos-policy
-setup_cosmos_policy() {
-    refuse_if_busy mlspaces-cosmos-policy || return 1
-    ensure_env mlspaces-cosmos-policy 3.13
-    local PIP; PIP="$(pip_ mlspaces-cosmos-policy)"
-    # third_party/cosmos is a submodule, so a recursive clone already provides it; sync_clone
-    # covers the non-recursive case and re-asserts the SHA either way.
-    sync_clone "$COSMOS_REPO" "$REPO/third_party/cosmos" "$COSMOS_SHA"
-
-    "$PIP" install "setuptools<81" wheel
-    # cosmos-framework's own cu130-torch213 uv group pins exactly this torch/CUDA build.
-    "$PIP" install --index-url "$TORCH_CU130" "torch==2.13.0+cu130" "torchvision==0.28.0+cu130" \
-        "torchcodec==0.14.0+cu130"
-    # natten has no PyPI wheel; upstream resolves it through a custom uv index declared in
-    # cosmos-framework/pyproject.toml, which is a plain PEP 503 index and works with
-    # --extra-index-url the same way.
-    "$PIP" install --extra-index-url https://nvidia-cosmos.github.io/cosmos-dependencies/v1.5.0 \
-        "natten==0.21.6+cu130.torch213"
-    # Deliberately skipped: flash-attn / flash-attn-3-nv (upstream's own cu130-torch213 group
-    # leaves both commented out -- no wheel exists for this torch/CUDA ABI) and
-    # transformer-engine / torchao (GB200-only training accelerators, in the "-train" group only,
-    # and irrelevant to inference-only serving).
-    "$PIP" install accelerate av cattrs "diffusers>=0.39.0" einops hydra-core imageio-ffmpeg \
-        imageio loguru msgpack nvidia-cudnn-frontend nvidia-ml-py obstore omegaconf pydantic \
-        requests scipy termcolor "transformers>=4.57.1,<5.0.0" tyro websockets
-
-    # The policy-server group: a WebSocket server wrapping OpenPI's own WebsocketPolicyServer --
-    # which is why the harness-side client written for pi0.5 is reused unchanged for Cosmos.
-    # --no-deps, then its real deps by hand, deliberately NOT respecting openpi-client's
-    # numpy<2.0.0 pin: letting the resolver satisfy it forces dm-tree back to 0.1.8, the last
-    # release before it shipped a cp313 wheel, and building 0.1.8 from source fails regardless of
-    # cmake version (its vendored ~2022 abseil-cpp does not compile against gcc 13). numpy>=2
-    # lets pip resolve dm-tree 0.1.10 and sidesteps the whole toolchain issue.
-    "$PIP" install --no-deps openpi-server openpi-client
-    "$PIP" install "filelock>=3.27.0" "dm-tree>=0.1.8" "msgpack>=1.0.5" "pillow>=9.0.0" \
-        "websockets>=11.0"
-    "$PIP" install --no-deps -e "$REPO/third_party/cosmos"
-
-    # Upstream's quickstart is `uv sync --all-extras --group=cu130-torch213-train
-    # --group=policy-server` -- and --all-extras is not optional convenience:
-    # cosmos_framework/utils/config.py imports cosmos_framework.trainer at module scope (inside a
-    # dataclass body), pulling in the entire training stack just to import the Config class the
-    # DROID server's argument parsing depends on. Nearly all of these are declared only in
-    # pyproject.toml's "train" extras, never in the base dependencies -- an upstream metadata gap.
-    # megatron-core, lerobot and torchtitan are left out: they are uv git sources pinned to
-    # specific revisions, not on PyPI, and nothing in the DROID inference path reaches them.
-    # aioboto3 must be pinned: unpinned alongside multi-storage-client's boto3<2,>=1.36, pip's
-    # resolver backtracks it to pre-2019 releases trying to jointly satisfy ~80 packages and never
-    # recovers (ResolutionImpossible).
-    # Installed in CHUNKS rather than one command, and this is not cosmetic. As a single
-    # ~76-package solve, modern pip aborts with `resolution-too-deep` ("the dependency graph is
-    # too complex for pip to solve efficiently") and installs NOTHING -- the peer built this env
-    # on an older pip that merely backtracked slowly. Splitting it means several small solves
-    # instead of one intractable joint one; the resulting package set is the same, and
-    # `scripts/check_env_parity.py --sync-to-peer` reconciles any version that resolved
-    # differently. Chunks are grouped by role so a failure points somewhere specific.
-    # The two pins are load-bearing, not preferences:
-    #   * aioboto3 unpinned alongside multi-storage-client's boto3<2,>=1.36 sends the resolver
-    #     back to pre-2019 releases (whose own boto3 pins bottom out under 1.9.50) and it never
-    #     recovers -- ResolutionImpossible.
-    #   * multi-storage-client is pinned to the version upstream declares.
-    local COSMOS_CHUNKS=(
-        "iopath webdataset einx fvcore futureproof arrgh flopth"
-        "multi-storage-client[boto3,google-cloud-storage,fsspec,observability-otel,vault]==0.44.0"
-        "aioboto3>=15.0.0 aiofiles aiohttp blobfile boto3 botocore s3fs rsa"
-        "pandas polars fastparquet zarr tensorstore h5py lz4 semver pytz packaging parse datasets more-itertools"
-        "better-profanity nltk sentencepiece tiktoken ftfy qwen-vl-utils openai"
-        "fastapi httpx flask gradio ray[serve] python-memcached psycopg2-binary pydispatcher"
-        "kornia timm peft open-clip-torch lpips torch-fidelity torch-optimizer retinaface-py"
-        "matplotlib mediapy moviepy imagecodecs scikit-image opencv-contrib-python pillow>=12.2.0"
-        "librosa soundfile trimesh plyfile pygltflib polyscope xatlas glfw pyopengl"
-        "slangtorch pycocotools py3nvml wandb typeguard pytest ninja pyyaml"
-    )
-    local chunk
-    for chunk in "${COSMOS_CHUNKS[@]}"; do
-        # shellcheck disable=SC2086
-        "$PIP" install $chunk
-    done
-    # The bulk install drags huggingface-hub/transformers forward via gradio/datasets; re-pin
-    # transformers to what cosmos-framework itself declares, last, so it sticks.
-    "$PIP" install "transformers>=4.57.1,<5.0.0"
-}
 
 # ---------------------------------------------------------------- openpi (divergent)
 setup_openpi() {
@@ -697,46 +609,6 @@ else:
 sys.exit(0 if ok else 1)
 EOF
         ;;
-      mlspaces-cosmos-policy)
-        # Checked WITH the CUDA 13 forward-compat libs on the path, because that is how
-        # scripts/serve_cosmos.sh actually runs it. This env's torch is cu130 and needs an
-        # r580 driver; this host has r570, so without these libs torch imports fine and then
-        # cannot see a GPU. Verifying a configuration the server does not use would be
-        # theatre in either direction -- a false FAIL here, or a false PASS if the assertion
-        # were dropped instead.
-        LD_LIBRARY_PATH="${CUDA_COMPAT_DIR:-$HOME/cuda-compat-13/usr/local/cuda-13.0/compat}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-        "$PY" - <<'EOF' || rc=1
-import os, sys, torch
-print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
-ok = True
-# A check that passes on an env whose torch cannot see a GPU is worse than no check: the
-# mlspaces-cosmos-policy env did exactly that, printing avail=False and still reporting OK,
-# and the real failure surfaced much later as "CUDA is required for OmniMoTModel inference".
-# Driver/runtime mismatches (cu130 torch on an r570 driver) look fine at import and fail at
-# first allocation, so allocate.
-if not torch.cuda.is_available():
-    print("  FAIL: torch cannot see any GPU (driver/runtime mismatch?)"); ok = False
-else:
-    try:
-        torch.zeros(8, device="cuda")
-    except Exception as e:
-        print(f"  FAIL: CUDA allocation failed: {type(e).__name__}: {str(e)[:160]}"); ok = False
-if "cu130" not in torch.__version__:
-    print("  FAIL: torch is not the cu130 build"); ok = False
-_sm = os.environ["EXPECTED_SM"]
-if _sm not in " ".join(torch.cuda.get_arch_list()):
-    print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
-for mod, label in (("natten", "natten"),
-                   ("openpi_server.websocket_policy_server", "openpi_server"),
-                   ("cosmos_framework.scripts.action_policy_server_robolab",
-                    "action_policy_server_robolab")):
-    try:
-        __import__(mod); print(f"  {label} OK")
-    except Exception as e:
-        print(f"  FAIL: {label}: {type(e).__name__}: {e}"); ok = False
-sys.exit(0 if ok else 1)
-EOF
-        ;;
     esac
     [ $rc -eq 0 ] && echo "  $name OK" || echo "  $name FAILED"
     return $rc
@@ -754,7 +626,6 @@ for t in "${TARGETS[@]}"; do
             mlspaces-m2t2)          setup_m2t2 ;;
             mlspaces-tiptop)        setup_tiptop ;;
             mlspaces-dreamzero)     setup_dreamzero ;;
-            mlspaces-cosmos-policy) setup_cosmos_policy ;;
             openpi)                 setup_openpi ;;
         esac
     fi

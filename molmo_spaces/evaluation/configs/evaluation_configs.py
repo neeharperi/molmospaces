@@ -35,7 +35,6 @@ from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.configs.policy_configs import BrownianMotionPolicyConfig, DummyPolicyConfig
 from molmo_spaces.configs.policy_configs_baselines import (
     CAPPolicyConfig,
-    CosmosPolicyConfig,
     DreamZeroPolicyConfig,
     MolmoAct2PolicyConfig,
     Pi0PolicyConfig,
@@ -243,44 +242,6 @@ class MolmoAct2PolicyEvalConfig(JsonBenchmarkEvalConfig):
         self.robot_config.action_noise_config.enabled = False
 
 
-class CosmosEdgePolicyEvalConfig(JsonBenchmarkEvalConfig):
-    """Cosmos3-Edge-Policy-DROID (4B). Server wraps openpi's own WebsocketPolicyServer and
-    uses the same action space/gripper convention as pi0.5 -- default control rate matches
-    PiPolicyEvalConfig's until verified otherwise against the leaderboard. A separate class
-    from Nano (not a shared one with a variant flag) because eval_main.py's --checkpoint_path
-    override has no counterpart for remote_config.port, and Edge/Nano need two independent
-    server processes on two different ports -- see docs/eval_reproduction.md."""
-
-    robot_config: FrankaRobotConfig = FrankaRobotConfig()
-    policy_config: CosmosPolicyConfig = CosmosPolicyConfig()
-    policy_dt_ms: float = float(os.environ.get("COSMOS_DT_MS", "66.0"))
-    end_on_success: bool = True
-
-    def model_post_init(self, __context):
-        super().model_post_init(__context)
-        self.robot_config.action_noise_config.enabled = False
-
-
-class CosmosNanoPolicyEvalConfig(JsonBenchmarkEvalConfig):
-    """Cosmos3-Nano-Policy-DROID (16B) -- see CosmosEdgePolicyEvalConfig for why this is a
-    separate class rather than a shared one with a checkpoint override."""
-
-    robot_config: FrankaRobotConfig = FrankaRobotConfig()
-    policy_config: CosmosPolicyConfig = CosmosPolicyConfig(
-        checkpoint_path="nvidia/Cosmos3-Nano-Policy-DROID",
-        # Same COSMOS_PORT override contract as the Edge config: a hardcoded 8004 here
-        # silently shadowed it, so scripts/cosmos_nano_json_ab.sh's arms both connected to
-        # the campaign server instead of their own and the A/B measured nothing.
-        remote_config=dict(
-            host="localhost", port=int(os.environ.get("COSMOS_PORT", "8004"))
-        ),
-    )
-    policy_dt_ms: float = float(os.environ.get("COSMOS_DT_MS", "66.0"))
-    end_on_success: bool = True
-
-    def model_post_init(self, __context):
-        super().model_post_init(__context)
-        self.robot_config.action_noise_config.enabled = False
 
 
 class TiptopEvalConfig(JsonBenchmarkEvalConfig):

@@ -102,7 +102,6 @@ ENVS: dict[str, EnvSpec] = {
     "mlspaces-m2t2": EnvSpec(peer="polaris-m2t2"),
     "mlspaces-tiptop": EnvSpec(peer="polaris-tiptop"),
     "mlspaces-dreamzero": EnvSpec(peer="polaris-dreamzero"),
-    "mlspaces-cosmos-policy": EnvSpec(peer="polaris-cosmos-policy"),
 }
 
 # Every env scripts/setup_envs.sh knows how to build must appear above, or a new env could be

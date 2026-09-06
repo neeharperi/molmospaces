@@ -14,7 +14,7 @@
 # room to spare. Placement is by footprint and by which pairs never spike together:
 #
 #   GPU0  dreamzero  45 GB                            + 1 render lane
-#   GPU1  cosmos_nano 35 + cosmos_edge 10             + 2 render lanes
+#   GPU1  (free -- Cosmos removed 2026-09-06)
 #   GPU2  molmoact2 22 + tiptop 10 + m2t2 5           + 2 render lanes
 #   GPU3  pi05 ~19 + pi0 ~19 (JAX capped)             + 2 render lanes
 #
@@ -61,8 +61,6 @@ export MLSPACES_ASSETS_DIR="${MLSPACES_ASSETS_DIR:-$HOME/mlspaces-assets}"
 # NUMA node is asserted at launch against /sys, so a wrong entry here fails loudly.
 LANES=(
   "dreamzero      0 0"
-  "cosmos_nano    1 0"
-  "cosmos_edge    1 0"
   "molmoact2_droid 2 1"
   "tiptop         2 1"
   "pi05_droid     3 1"
@@ -103,8 +101,6 @@ start_servers() {
         echo "  started server: $name"
     }
     _srv dreamzero   "env GPUS=0 DIT_SPLIT=0 PORT=5000 bash scripts/serve_dreamzero.sh"
-    _srv cosmos_nano "env GPU=1 PORT=8004 CKPT=nvidia/Cosmos3-Nano-Policy-DROID bash scripts/serve_cosmos.sh"
-    _srv cosmos_edge "env GPU=1 PORT=8003 bash scripts/serve_cosmos.sh"
     _srv molmoact2   "env GPU=2 PORT=8000 bash scripts/serve_molmoact2.sh"
     _srv m2t2        "env GPU=2 PORT=8123 bash scripts/serve_m2t2.sh"
     # TiPToP must run from the REPO ROOT: with cwd=third_party/tiptop, sys.path[0] contains a

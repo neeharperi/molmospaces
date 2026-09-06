@@ -171,25 +171,13 @@ POLICIES: dict[str, PolicySpec] = {
         # port during fan-out and hard-fails a lane that is actually healthy.
         port=int(os.environ.get("DREAMZERO_PORT", "5000")),
     ),
-    "cosmos_edge": PolicySpec(
-        exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:CosmosEdgePolicyEvalConfig",
-        checkpoint_path="nvidia/Cosmos3-Edge-Policy-DROID",
-        host="localhost",
-        port=8003,
-    ),
-    "cosmos_nano": PolicySpec(
-        exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:CosmosNanoPolicyEvalConfig",
-        checkpoint_path="nvidia/Cosmos3-Nano-Policy-DROID",
-        host="localhost",
-        port=8004,
-    ),
 }
 
 # The three policies BENCHMARK.md's acceptance criteria are load-bearing for (27 required
 # cells = 3 * 9, plus the 3 Group B aggregates). DreamZero and Cosmos (added after
 # BENCHMARK.md was written) are evaluated and reported, but a miss is informational only.
 REPRODUCTION_POLICIES = ("pi05_droid", "molmoact2_droid", "tiptop")
-INFORMATIONAL_POLICIES = ("dreamzero", "cosmos_edge", "cosmos_nano", "pi0_droid")
+INFORMATIONAL_POLICIES = ("dreamzero", "pi0_droid")
 
 # The leaderboard's pooled-aggregate row name for the Group B (MolmoBot Combined) comparison.
 GROUP_B_LEADERBOARD_TASK_NAME = "MolmoBot Combined"
