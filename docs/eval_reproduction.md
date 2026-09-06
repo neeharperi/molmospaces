@@ -3269,3 +3269,80 @@ the `timeonly` arm exists to separate duration from control granularity.
 Net effect of this thread: the horizon hypothesis is closed as an independent cause, the
 chunk_size arm gained a mechanism, and the two facts that started the line -- Edge~Nano and the
 geometry signature -- are untouched.
+
+## 2026-09-06 -- BREAKTHROUGH: the Cosmos gap is ours, and it closes
+
+`scripts/cosmos_refproto_ab.sh` arm `refproto` (chunk 32, policy_dt_ms 100, horizon 500) on
+cosmos_nano/Pick-v1.5:
+
+| configuration | rate |
+|---|---|
+| campaign cell (chunk 8, dt 66) | 38.10% (n=1000) |
+| **arm `refproto` (chunk 32, dt 100)** | **72.33% (217/300)** |
+| leaderboard `cosmos` | 66.50% |
+
+The arm **exceeds** the leaderboard entry. Verified it genuinely ran the intended config -- the
+cell's config dump records `chunk_size: 32, policy_dt_ms: 100.0` and the server banner reports
+`chunk=32`. (The `# dt: 0.067` in results.csv is NOT the control rate; see the retraction
+below.)
+
+**Not a category-mix artifact.** `--max_episodes 300` selects a house subset, so the arm's
+category shares differ from the full cell (total absolute deviation 0.184). Reweighting the
+arm to the full cell's mix gives **72.74%** -- essentially unchanged.
+
+**The pre-registered prediction is confirmed.** Before the arms landed, this document predicted
+that if the control-fidelity mechanism was right, the gain would concentrate in narrow/upright
+categories rather than lifting everything uniformly:
+
+    narrow/upright gain   +55.2 pp  (k=8)
+    wide/open-top gain    +18.3 pp  (k=10)
+    ratio                  3.0x
+
+And the geometry signature that started this whole line has closed and inverted: our rate as a
+fraction of the reference was narrow 0.429 / open 0.641 (separation +0.212); it is now narrow
+1.254 / open 1.059 (separation -0.195). The deficit concentrated on precision grasps is gone.
+
+### RETRACTION: the `# dt` header is not the policy control rate
+
+The reason I chose dt 100 was wrong, even though the experiment worked. `eval_to_csv.py:244`
+gives `--dt` a CLI default of `67/1000` while the function default (line 156) is `0.1`, and
+line 223 simply echoes whichever was used into the `# dt:` header. It is consumed only by the
+jerk computation (`d3 /= dt ** 3`, line 96). **It is a post-hoc normalisation constant for the
+CSV converter, not a record of the policy's control rate.**
+
+So the earlier finding -- "cosmos is the only policy whose row was produced at dt 0.1" -- is
+**withdrawn**. The 0.1-versus-0.067 split across leaderboard rows is a tooling artifact: two
+different default paths in one script, hit depending on whether the converter was called
+programmatically (0.1) or via CLI (0.067). Cosmos's `run_path` of `/tmp/cosmos3_csv/` is
+consistent with the programmatic path.
+
+This also explains, concretely, why the jerk comparison was unusable: reference cosmos jerk was
+divided by 0.1**3 and ours by 0.067**3, a 3.3x scaling with no physical meaning.
+
+I got the right experiment for the wrong reason. Recording it that way rather than
+retro-fitting a rationale.
+
+### What is NOT yet established: which knob did it
+
+`refproto` changed three things at once (chunk 8->32, dt 66->100, and hence episode duration
+33s->50s). The decomposition is still open:
+
+* arm `timeonly` (chunk 8, dt 66, horizon 750 -> 50s) is running and isolates duration.
+* A fourth arm (chunk 32, dt 66, horizon 500) is still needed to separate chunk from dt.
+
+The prior favours **chunk**: `action_policy_droid_nano.py:195` sets `chunk_length=32` and line
+232 pins the tokenizer's `encode_exact_durations=[33]` to match it, so the architecture is
+built around a 32-action chunk. `chunk_size=8` was borrowed from pi0.5 by its own comment, and
+it is the deviation shared by Edge and Nano -- which is what the Edge~Nano aggregate result
+pointed at from the start.
+
+### Scope consequence
+
+If this holds, every Cosmos cell needs re-running: 4 verdicted FAILs, 7 completed
+cosmos_edge cells, and 7 in-flight/pending. That is real cost, and it is the difference between
+four documented mismatches and four passes. Do not start re-running until the decomposition
+identifies the knob -- changing dt without cause would bake in an unjustified deviation.
+
+Also note arm `current` terminated early at 45 episodes rather than 300, so it is not a usable
+same-n baseline; the campaign's n=1000 cell serves that role since it is the identical
+configuration. The arm needs re-running.
