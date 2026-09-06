@@ -3346,3 +3346,52 @@ identifies the knob -- changing dt without cause would bake in an unjustified de
 Also note arm `current` terminated early at 45 episodes rather than 300, so it is not a usable
 same-n baseline; the campaign's n=1000 cell serves that role since it is the identical
 configuration. The arm needs re-running.
+
+## 2026-09-06 -- RETRACTION: the "breakthrough" was my own flag
+
+The result reported earlier today -- arm `refproto` at 72.33%, above the 66.50% leaderboard
+entry -- is **withdrawn**. It was obtained by giving Cosmos 2.5x the episode time the benchmark
+allows.
+
+`eval_main.py:295` `determine_task_horizon()` resolves in order: (1) an explicit
+`--task_horizon_steps` / `--task_horizon_sec` override, then (2) the benchmark's per-episode
+`task_horizon_sec`, converted to steps via `policy_dt_ms`. Pick-v1.5 specifies
+**`task_horizon_sec = 20`**. The campaign cell passes no override and therefore runs 20s = 303
+steps at dt 66ms, matching its observed cap of 39 rows x chunk 8 = 312 within chunk granularity.
+
+Every arm I ran passed the override:
+
+| arm | flag | steps | dt | seconds | vs benchmark |
+|---|---|---|---|---|---|
+| current | 500 | 500 | 66ms | 33.0 | 1.65x |
+| refproto | 500 | 500 | 100ms | 50.0 | **2.5x** |
+| timeonly | 750 | 750 | 66ms | 49.5 | **2.5x** |
+| chunkonly | 500 | 500 | 66ms | 33.0 | 1.65x |
+
+So `refproto` 72.33% and `timeonly` 64.9% measure what Cosmos does with 2.5x the allowed time.
+They say nothing about the leaderboard gap. The claim that the pre-registered per-category
+prediction was confirmed is withdrawn with them -- it was confirmed by an invalid arm.
+
+**Root cause.** I introduced `--task_horizon_steps` to control what I took to be a dt-induced
+confound: the horizon is in policy steps, so changing dt would change episode duration. That
+premise was false. The harness fixes episode duration in SECONDS and derives the step count
+from dt, so it is dt-invariant by construction and no confound existed. The simpler two-arm
+design that preceded the "fix" would have been valid. Adding the flag is what broke it.
+
+That is the second time in this investigation a control introduced for a misread mechanism has
+done more damage than the thing it was meant to control -- the first being the A/B gate that
+failed closed on healthy input. The lesson is narrow and worth stating: **before adding a
+control, verify the mechanism it controls for actually exists in the code.**
+
+**What survives, because none of it depended on these arms:**
+
+* Edge (4B) ~ Nano (16B) within a few points on all four shared tasks at n~1000.
+* The narrow-vs-open geometry signature (+0.18 to +0.29 separation, replicated across both
+  checkpoints and both task suites), which compares real campaign cells against the reference.
+* The retraction of the `# dt` header finding (that one stands -- `# dt` really is
+  eval_to_csv.py's jerk-normalisation constant).
+
+**The open question, restated correctly**: at the benchmark's own 20s budget, does chunk 32
+help? `scripts/cosmos_chunk_valid_ab.sh` tests exactly that -- chunk 8 vs chunk 32, dt 66,
+**no horizon override**, n=300/arm. It carries a third gate that aborts if a horizon override
+ever leaks in again.
