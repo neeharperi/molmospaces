@@ -28,7 +28,14 @@ GROUP="${3:-all}"
 case "$GROUP" in all|group-a|group-b) ;; *) echo "bad group '$GROUP' (want all|group-a|group-b)" >&2; exit 2 ;; esac
 DATE_TAG="${DATE_TAG:-20260819_full}"
 CLASSIC_WORKERS="${CLASSIC_WORKERS:-4}"
-FILAMENT_WORKERS="${FILAMENT_WORKERS:-1}"
+# 4, not 1. The reference campaign capped filament at 1 worker because 4 concurrent Vulkan
+# contexts exhausted GPU handles on its 48 GB RTX PRO 5000 cards; 8 concurrent contexts are
+# verified working on this host (see the note at the top of scripts/launch_campaign.sh).
+# Leaving the reference's cap as the DEFAULT meant any lane relaunched without an explicit
+# export silently reverted to it: the cosmos_edge and cosmos_nano lanes, restarted after the
+# 2026-09-05 GPU3 incident, ran every filament cell single-worker at 2.4-4x below the rate the
+# same policies hit at 4 workers, and nothing in the logs said so.
+FILAMENT_WORKERS="${FILAMENT_WORKERS:-4}"
 # LANE AWARENESS. The campaign runs one copy of this script per policy, concurrently, each
 # rendering on its own GPU. LANE_GPU is the nvidia-smi index this lane owns (logging and
 # numactl only); MUJOCO_EGL_DEVICE_ID is the EGL device index that actually renders there.
