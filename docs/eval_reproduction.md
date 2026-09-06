@@ -3085,3 +3085,36 @@ explanation lies elsewhere. If the arms match, dt and chunk die together.
 
 Stating this before the arms land makes the test sharper than an OVERALL number alone: three
 distinguishable outcomes rather than better/worse.
+
+### The geometry signature replicates across both checkpoints and both tasks
+
+The narrow-vs-open split found on `cosmos_nano`/Pick-v1.5 is not a one-cell artifact. Applying
+the same grouping to every Cosmos cell with a reference breakdown:
+
+| cell | narrow/upright | wide/open-top | separation |
+|---|---|---|---|
+| nano Pick-v1.5 | 0.429 (k=8) | 0.641 (k=10) | **+0.212** |
+| edge Pick-v1.5 | 0.377 (k=8) | 0.667 (k=10) | **+0.291** |
+| nano Pick-v2-classic | 0.235 (k=17) | 0.500 (k=25) | **+0.265** |
+| edge Pick-v2-classic | 0.059 (k=17) | 0.240 (k=25) | **+0.181** |
+
+Four cells, two checkpoints, two tasks, separation positive in every one and tightly ranged
+(+0.18 to +0.29). Pick-v2-classic uses 268 fine-grained instance names rather than the 18
+coarse categories, so membership there is by object keyword (`bottle`, `spray`, `dispenser`,
+`shaker`, `remote`, `knife`, `fork`, `spoon`, ... versus `bowl`, `box`, `mug`, `kettle`, `cup`,
+`pot`, ...), which is why k differs between rows.
+
+**Honesty about the statistics.** The grouping was formed after seeing Pick-v1.5's ratios, so
+that cell cannot corroborate itself. The other three are out-of-sample for the *direction* of
+the effect, which was predicted before they were computed -- but the keyword list was written
+by the same intuition, so treat this as a consistent descriptive pattern rather than a
+hypothesis test with a calibrated p-value.
+
+What it does establish: the deficit is systematically worse on objects that need a precise
+narrow grasp, on both a 4B and a 16B checkpoint, on two different task suites. That is a
+control-fidelity signature, and it is shared -- which is the same conclusion the Edge~Nano
+aggregate comparison reached, now supported at a finer grain.
+
+This makes the pre-registered `refproto` prediction sharper: the arm should lift the narrow
+rows toward the open rows in *both* the Pick-v1.5 numbers above. A uniform lift, or a lift
+confined to the already-good open categories, falsifies the mechanism even if OVERALL improves.
