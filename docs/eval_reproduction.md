@@ -2926,3 +2926,35 @@ Both would cap Edge and Nano identically, which is the signature we are looking 
 camera question cannot be tested there -- Pick-v1.5 exposes only 2 cameras
 (`exo_camera_1`, `wrist_camera`), so there is no distinct second exterior to select. It needs
 Pick-v2-classic, which sets up 5, at n=300 rather than the underpowered draws above.
+
+### Correction to the entry above: the camera deviation is weaker than stated
+
+The section above listed the `concat_view` L/R shoulder pair as a surviving deviation on a par
+with `chunk_length`. That overstates it, and the correction changes what to run next.
+
+`cosmos_policy.py:140-152` already records that the recipe-faithful pair was tried and failed
+for a rig-specific reason: **`randomized_zed2_analogue_2` frequently contains no robot** (see
+`runs/_debug/Pick-v2-classic/`), which violates the checkpoint's own prompt -- "two
+horizontally concatenated third-person perspective views of the scene from opposite sides,
+with the robot visible". So this benchmark's rig cannot satisfy "L/R shoulder" faithfully; the
+recipe's viewpoint spec does not map cleanly onto it.
+
+Nor is the slot-2 space unexplored. Three arms have been run on Pick-v2-classic at n=300:
+
+| slot 2 | rate |
+|---|---|
+| duplicate (droid_shoulder) | 6.67% |
+| randomized_gopro_analogue_1 | 6.00% |
+| randomized_zed2_analogue_1 | 10.33% |
+| *steps4 -- same config as row 1* | *11.33%* |
+
+The spread between the two **identical-config** arms (6.67 vs 11.33) is larger than the spread
+between any two *different* camera arms. So the honest statement is not "the distinct-view
+hypothesis survives" but "every camera arm run so far is inside the noise floor, and none is
+established either way". That is a weaker claim and it does not justify spending the next
+n=300 pair on cameras.
+
+What stands unchanged from the entry above: the cross-model Edge~Nano observation, the
+retirement of the JSON prompt, the ~5pp noise floor, and `chunk_length=32` -- which remains a
+clean, recipe-explicit, architecture-pinned deviation and the only arm that ever moved the
+number up.
