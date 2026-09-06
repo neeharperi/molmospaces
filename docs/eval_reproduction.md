@@ -3118,3 +3118,42 @@ aggregate comparison reached, now supported at a finer grain.
 This makes the pre-registered `refproto` prediction sharper: the arm should lift the narrow
 rows toward the open rows in *both* the Pick-v1.5 numbers above. A uniform lift, or a lift
 confined to the already-good open categories, falsifies the mechanism even if OVERALL improves.
+
+### Jerk is exhausted as a diagnostic -- negative result, at two levels
+
+The leaderboard CSVs carry `jerk_joint_mean` per category, which looked like a way to test the
+control-fidelity mechanism kinematically, independent of success. It does not work, for two
+separate reasons, and both are worth recording so this is not attempted a third time.
+
+**Absolute jerk is not comparable across pipelines.** Pick-v1.5 OVERALL:
+
+| series | jerk_joint_mean | ours/ref |
+|---|---|---|
+| REF cosmos | 48.04 | -- |
+| our cosmos_nano | 991.93 | 20.6x |
+| our cosmos_edge | 1512.15 | 31.5x |
+| REF pi05 | 84.07 | -- |
+| our pi05 | 2448.02 | **29.1x** |
+
+Our pi05 is 29x its reference and passes 9/9, so the ~25x offset is a definition or units
+difference between the two harnesses, not a defect. This confirms the earlier note that jerk is
+not cross-pipeline comparable, now with the multiplier measured.
+
+**Normalizing within each series does not discriminate either.** Mean per-category jerk divided
+by that series' own OVERALL, split by the narrow/open grouping:
+
+| series | narrow | open | narrow - open |
+|---|---|---|---|
+| REF cosmos | 1.0252 | 0.9797 | **+0.0455** |
+| REF pi05 | 1.0201 | 0.9833 | **+0.0367** |
+| our cosmos_nano | 0.9802 | 1.0141 | -0.0339 |
+| our cosmos_edge | 0.9463 | 1.0419 | -0.0955 |
+| our pi05 | 0.9689 | 1.0238 | **-0.0549** |
+
+Both reference series put *more* jerk on narrow objects; all three of ours put *less*. The sign
+flips -- but it flips for **pi05 as well**, and pi05 reproduces its entry on this exact task.
+So this is a pipeline-wide property affecting every policy equally, and it carries no
+information about why Cosmos specifically falls short.
+
+Jerk is closed. The `refproto` A/B and its pre-registered per-category prediction remain the
+live test.
