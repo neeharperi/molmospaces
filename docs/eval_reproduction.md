@@ -3157,3 +3157,47 @@ information about why Cosmos specifically falls short.
 
 Jerk is closed. The `refproto` A/B and its pre-registered per-category prediction remain the
 live test.
+
+### The horizon is 500 POLICY STEPS, so dt sets episode duration -- and that reframes everything
+
+`JsonBenchmarkEvalConfig.task_horizon = 500` and `task.py:430` terminates on
+`episode_step_count >= task_horizon`. The budget is in **policy steps**, not seconds, so
+`policy_dt_ms` determines how much simulated time an episode actually gets:
+
+| policy | our dt | our sim seconds | reference dt | reference seconds @500 |
+|---|---|---|---|---|
+| molmoact2 | 66 | 33.0 | 0.067 | 33.5 -- **matched**, 9/9 PASS |
+| pi05 (Group B) | 66 | 33.0 | 0.067 | 33.5 -- **matched**, PASS |
+| pi05 (Group A) | 66 | 33.0 | 0.1 | 50.0 -- mismatched, still PASS |
+| **cosmos** | 66 | **33.0** | **0.1** | **50.0** -- mismatched, 0/4 PASS |
+
+This was found while checking my own A/B for a confound, and it turned out to be the more
+interesting object. Every policy that reproduces its entry runs at a dt matching its reference;
+cosmos runs 17 seconds short of the budget its row was measured under, on every task.
+
+It also accounts for the evidence already gathered, without further assumptions:
+
+* **The geometry signature.** A truncated horizon cuts precision grasps on narrow objects
+  first, while fast top-grasps of bowls and boxes finish inside 33s either way -- exactly the
+  0.43-vs-0.64 split, replicated on both checkpoints and both task suites.
+* **Edge ~ Nano.** A time cap is indifferent to model capacity, so a 4B and a 16B checkpoint
+  hit the same ceiling. That is the observation that started this line.
+* **Why pi05 passes Group A despite a dt mismatch.** Open-v1 and Close-v1 finish well inside
+  33s, so the truncation never binds. The mismatch is real there and simply does not cost
+  anything -- which is why it looked like counter-evidence against dt earlier.
+
+**The A/B is now three arms**, because dt alone confounds control granularity with a 1.5x
+larger time budget:
+
+| arm | chunk | dt | horizon | sim time |
+|---|---|---|---|---|
+| `current` | 8 | 66ms | 500 | 33s |
+| `refproto` | 32 | 100ms | 500 | 50s |
+| `timeonly` | 8 | 66ms | **750** | 50s |
+
+  `timeonly ~ refproto > current` => the deficit is episode time
+  `refproto > timeonly ~ current` => it is the chunk/rate, extra time incidental
+  all three equal                 => neither; the reference row itself remains
+
+The per-category prediction stands and now has a sharper reading: whichever arm wins should
+lift the narrow/upright categories specifically.

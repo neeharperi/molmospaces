@@ -45,11 +45,11 @@ export MLSPACES_FORCE_INSTALL=False
 export MLSPACES_PINNED_ASSETS_FILE="$PWD/reference/pinned_assets_20260816.json"
 EGL=$(awk -v g=$GPU '$1!~/^#/ && $1==g{print $2}' runs/_egl_mapping.txt)
 
-run_arm() {  # $1 = label   $2 = client chunk size   $3 = policy dt in ms
-  local arm="$1" chunk="$2" dtms="$3"
+run_arm() {  # $1 = label   $2 = chunk   $3 = policy dt ms   $4 = task horizon steps
+  local arm="$1" chunk="$2" dtms="$3" horizon="$4"
   local slog="runs/_servers/cosmos_proto_ab_${arm}.log"
   local clog="runs/cosmos_nano/$TASK/_ab_proto_${arm}/eval_stdout.log"
-  echo "=== [$(date +%H:%M:%S)] arm $arm  (chunk=$chunk dt=${dtms}ms) ==="
+  echo "=== [$(date +%H:%M:%S)] arm $arm  (chunk=$chunk dt=${dtms}ms horizon=${horizon} => $(awk -v h=$horizon -v d=$dtms 'BEGIN{printf "%.0f", h*d/1000}')s sim) ==="
   rm -f "$clog"
 
   # GATE 0 -- the override must actually resolve. Cheap, and catches a shadowed env var
@@ -85,7 +85,8 @@ run_arm() {  # $1 = label   $2 = client chunk size   $3 = policy dt in ms
   COSMOS_PORT=$PORT COSMOS_CHUNK_SIZE=$chunk COSMOS_DT_MS=$dtms LANE_GPU=$GPU MUJOCO_EGL_DEVICE_ID=$EGL \
     conda run -n mlspaces-classic --no-capture-output \
       python scripts/eval.py --policy cosmos_nano --task "$TASK" \
-      --num_workers 4 --max_episodes $N --date "_ab_proto_$arm" >/dev/null 2>&1 &
+      --num_workers 4 --max_episodes $N --task_horizon_steps $horizon \
+      --date "_ab_proto_$arm" >/dev/null 2>&1 &
   local evalpid=$!
 
   # GATE 1 -- the client must talk to THIS server, not the campaign one on :8004.
@@ -108,13 +109,30 @@ run_arm() {  # $1 = label   $2 = client chunk size   $3 = policy dt in ms
   sleep 25
 }
 
-# A = what the campaign has been running.  B = the protocol the leaderboard row was
-# produced under (dt 0.1) at the chunk length the recipe pins the tokenizer to (32).
-run_arm current  8  66
-run_arm refproto 32 100
+# The task horizon is 500 POLICY STEPS (JsonBenchmarkEvalConfig.task_horizon), so dt sets how
+# much simulated time an episode gets: 500 x 66ms = 33s, but the reference row's dt of 0.1
+# gives 500 x 100ms = 50s. Changing dt alone therefore confounds control granularity with a
+# 1.5x larger time budget. Three arms decompose it:
+#
+#   A current   dt 66,  chunk 8,  500 steps -> 33s   what the campaign has run
+#   B refproto  dt 100, chunk 32, 500 steps -> 50s   the reference protocol, as specified
+#   C timeonly  dt 66,  chunk 8,  750 steps -> 50s   B's time budget, A's control
+#
+#   C ~ B > A  => the deficit is episode TIME, not control granularity
+#   B > C ~ A  => it is the chunk/rate, and the extra time is incidental
+#   all equal  => neither; the reference row itself is the remaining explanation
+#
+# This also predicts the geometry signature: a truncated horizon cuts precision grasps on
+# narrow objects first, while fast top-grasps of bowls and boxes finish inside 33s either way.
+# And it explains why pi05 and molmoact pass -- their reference dt is 0.067, so their 33s
+# matches; pi05's Group A reference is 0.1, but Open/Close finish well inside 33s so the
+# truncation never binds there.
+run_arm current  8  66  500
+run_arm refproto 32 100 500
+run_arm timeonly 8  66  750
 
 echo "=== nano chunk-size A/B complete (campaign 38.1%, leaderboard 66.5%) ==="
-for a in current refproto; do
+for a in current refproto timeonly; do
   f="runs/cosmos_nano/$TASK/_ab_proto_$a/results.csv"
   [ -f "$f" ] && grep OVERALL "$f" | awk -v A="$a" -F, '{printf "  %-10s %4s/%-5s = %6s%%\n",A,$8,$4,$9}'
 done
