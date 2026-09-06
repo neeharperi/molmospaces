@@ -2801,3 +2801,44 @@ stable and re-derivable. Swapping the comparison basis mid-campaign would mean c
 completed on different days were scored against different references.
 reference/leaderboard_snapshot_20260905.csv is committed alongside it as a secondary
 check; pass --leaderboard to compare against either.
+
+## 2026-09-06 -- why DreamZero cannot be parallelized, and what the campaign actually costs
+
+**Normalize throughput in episodes/hour, not houses/hour.** A Group-A house holds ~22 episodes
+(915 episodes / 41 houses for Close-v1); a Group-B house holds ~1. DreamZero's completed cells
+look 20x slower than its running one in houses/hr (0.54-0.57 vs 11.7) and are in fact the same
+speed: 12.0, 12.7 and 11.7 episodes/hr. Cross-policy comparisons elsewhere in this document are
+all Group-B-to-Group-B, where houses ~= episodes, and are unaffected.
+
+**DreamZero's `--num_workers 1` is load-bearing and cannot be lifted.** Two routes were
+examined and both rejected:
+
+1. *Per-session state in the server.* `socket_test_optimized_AR.py` keys AR state off a single
+   `_current_session_id` attribute (line 77) and resets on change (line 256), so concurrent
+   workers would reset each other's context. The buffers `_reset_state` clears -- frame
+   buffers, `_call_count`, `_is_first_call`, `video_across_time` -- are small and could be
+   keyed by session. But inference runs through
+   `self._policy.lazy_joint_forward_causal(batch)` behind `dist.broadcast`/`dist.barrier`:
+   the causal context lives inside a distributed multi-rank model, not in those buffers.
+   Making it session-safe means reaching into model internals, whose failure mode is
+   well-formed, non-constant, NaN-free actions and a plausible-looking run -- the exact class
+   of bug this campaign's standing rules exist to prevent.
+
+2. *One server instance per worker* (the `shard_port` / `MLSPACES_POLICY_INSTANCES` design).
+   Blocked on memory, not correctness: the server holds 70,524 MiB. Free headroom is 19.5 GB
+   on GPU0, 44.7 on GPU1, 25.2 on GPU2 and 61.0 on GPU3 -- and GPU3 is where filament
+   rendering concentrates, which is precisely where placing a large policy server corrupted
+   seven cells on 2026-09-05.
+
+**Resulting projection** at healthy 4-worker rates, all four lanes concurrent:
+
+| lane | cells left | rate | wall-clock |
+|---|---|---|---|
+| dreamzero  | 7 | ~12 ep/hr, 1 worker  | ~24 days |
+| tiptop     | 5 | ~23 h/hr Pick, ~8 PnP | ~19 days |
+| cosmos_nano| 5 | ~40 h/hr Pick, ~13 PnP| ~11 days |
+| cosmos_edge| 2 | ~26 h/hr PnP          | ~3 days  |
+
+So the 63-cell matrix is a **~3.5 week** job from here, set by DreamZero, with tiptop close
+behind. All four GPUs are at 95-100% utilization, so there is no idle capacity left to buy
+this back -- the remaining levers are scope, not scheduling.
