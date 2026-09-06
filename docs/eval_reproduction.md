@@ -3003,3 +3003,45 @@ policy on the board.
 
 The earlier `_ab_C_dt100` arm (26.67% vs 33.33%) does not refute this: n=60, z~0.75, and it
 varied dt while holding chunk at 8 -- the combination the recipe never describes.
+
+### Counter-evidence: dt mismatch alone demonstrably does not break reproduction
+
+Completing the table for all 9 tasks weakens the dt lead recorded above, and the weakening
+should be on the record next to it.
+
+Reference `# dt`, all 9 tasks:
+
+| policy | Group B (7 tasks) | ms_open / ms_close |
+|---|---|---|
+| cosmos | 0.1 | 0.1 |
+| pi05 | 0.067 | **0.1** |
+| molmoact | 0.067 | 0.067 |
+| tiptop | 0.067 | *(no entry)* |
+
+Against our configured `policy_dt_ms`:
+
+| policy | ours | matches reference? | our verdicts |
+|---|---|---|---|
+| molmoact2 | 66.0 | yes, all 9 | 9/9 PASS |
+| pi05 | 66.0 | Group B yes; **Group A no** (66 vs 100) | 9/9 PASS -- *including both Group A* |
+| tiptop | **20.0** | **no** (20 vs 67, a 3.35x mismatch) | 2/2 PASS |
+| cosmos | 66.0 | **no**, all 9 (66 vs 100) | 0/4 PASS |
+
+So this campaign contains two policies that run at a mismatched dt and reproduce their
+leaderboard entries anyway -- and pi05's Group A case is the *closest analogue to cosmos*:
+66ms against a 0.1 reference, the same direction and nearly the same ratio, passing at
+20.7 vs 22.7 and 67.2 vs 65.14.
+
+That is strong evidence against dt being causal on its own, and it corrects the framing of the
+entry above, which presented the 0.1 discovery as a likely cause. It is a real and previously
+unnoticed mismatch, and cosmos is genuinely the only policy mismatched on all nine tasks -- but
+"only policy mismatched everywhere" is a weaker claim than "cause", and the two counterexamples
+have to be carried alongside it.
+
+What still justifies `scripts/cosmos_refproto_ab.sh` is the **interaction**, not dt alone.
+Cosmos is a world model emitting a 32-action chunk whose tokenizer duration is pinned to that
+length (`encode_exact_durations=[33]`); pi05 and tiptop are not. Executing 8 of 32 actions at
+66ms is a different behaviour from executing the chunk the model was built to emit at the rate
+its reference row was measured at, and that combination has never been run. If the arms match
+at n=300, dt and chunk die together and what remains is the reference row itself -- `run_path:
+/tmp/cosmos3_csv/...`, a temp directory, the least traceable provenance on the board.
