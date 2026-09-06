@@ -39,6 +39,20 @@ RECONNECT_MAX_ATTEMPTS = 15
 RECONNECT_INITIAL_DELAY_SECS = 2
 RECONNECT_MAX_DELAY_SECS = 30
 
+# Bound every recv() as well. RECONNECT_MAX_ATTEMPTS only covers a server that has *closed*
+# the connection; a server that stays up but never answers is a different failure, and
+# websockets.sync's recv() blocks forever on it. That is what happened to the
+# tiptop/PnP-NextTo-v2 cell on 2026-09-04: workers 0, 1 and 2 wedged mid-episode between
+# 19:17 and 19:41 with no traceback and zero CPU thereafter, leaving worker 3 to run the cell
+# alone for the next 29 hours at a quarter of the requested throughput (1.06 houses/hr
+# against 23-30 for this policy's completed cells), while the wedged workers held their
+# sockets open (68 ESTABLISHED connections against 11,866 opened).
+#
+# Generous but finite: the slowest legitimate planning call observed in the server log is
+# 74s, so 10 minutes is ~8x headroom and still turns a permanent wedge into a failed episode
+# that the pipeline can move past.
+RECV_TIMEOUT_SECS = 600
+
 
 class TiptopWebsocketClient:
     """Websocket client that adds endpoint field for a TiPToP server."""
@@ -57,7 +71,7 @@ class TiptopWebsocketClient:
             ping_interval=PING_INTERVAL_SECS,
             ping_timeout=PING_TIMEOUT_SECS,
         )
-        metadata = msgpack_numpy.unpackb(conn.recv())
+        metadata = msgpack_numpy.unpackb(conn.recv(timeout=RECV_TIMEOUT_SECS))
         return conn, metadata
 
     def _wait_for_server(self) -> tuple[websockets.sync.client.ClientConnection, dict]:
@@ -106,12 +120,12 @@ class TiptopWebsocketClient:
         data = self._packer.pack(obs)
         try:
             self._ws.send(data)
-            response = self._ws.recv()
-        except websockets.exceptions.ConnectionClosedError:
-            logging.warning("ConnectionClosedError during infer. Reconnecting and retrying...")
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
+        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
+            logging.warning(f"{type(e).__name__} during infer. Reconnecting and retrying...")
             self._reconnect()
             self._ws.send(data)
-            response = self._ws.recv()
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
         if isinstance(response, str):
             import json
 
@@ -128,12 +142,12 @@ class TiptopWebsocketClient:
         data = self._packer.pack(reset_info)
         try:
             self._ws.send(data)
-            response = self._ws.recv()
-        except websockets.exceptions.ConnectionClosedError:
-            logging.warning("ConnectionClosedError during reset. Reconnecting and retrying...")
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
+        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
+            logging.warning(f"{type(e).__name__} during reset. Reconnecting and retrying...")
             self._reconnect()
             self._ws.send(data)
-            response = self._ws.recv()
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
         return response
 
     def get_server_metadata(self) -> dict:
