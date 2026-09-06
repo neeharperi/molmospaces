@@ -2873,3 +2873,56 @@ That is precisely what the running A/B settles empirically, and it is a better a
 either document. **Do not pre-emptively re-run any cosmos_nano cell on the JSON assumption**;
 the prior on that fix should now be low, and arm A (plaintext) matches both the model card and
 the current campaign configuration.
+
+## 2026-09-06 -- the Cosmos gap, reframed: a shared bottleneck, and what the recipe says
+
+**The decisive observation is cross-model, and it was sitting in the results the whole time.**
+Edge (4B) and Nano (16B) score within a few points of each other on every task they share, at
+n~1000:
+
+| task | edge 4B | nano 16B | leaderboard (nano) |
+|---|---|---|---|
+| Open-v1 | 8.3% | 6.9% | 32.0% |
+| Close-v1 | 55.5% | 53.4% | 79.1% |
+| Pick-v1.5 | 33.8% | 38.1% | 66.5% |
+| Pick-v2-classic | 8.2% | 11.2% | 32.3% |
+
+A 4x parameter gap producing no separation means the bottleneck is **downstream of model
+quality and shared by both checkpoints**. It is not the harness: that reproduces pi05 9/9,
+molmoact2 9/9, pi0 2/2, dreamzero 2/2 and tiptop 2/2 against their entries. "Cosmos-specific
+AND shared" is a far narrower target than the twelve single-model hypotheses tried before it.
+
+**This retires the JSON-prompt hypothesis** as a natural experiment already run at full n:
+`serve_cosmos.sh` passes `--format-prompt-as-json True` for Edge only, so Edge receives JSON
+and Nano plain text -- and they score the same. NVIDIA's model card for
+`Cosmos3-Nano-Policy-DROID` independently documents plain language instructions with no such
+flag.
+
+**The A/B noise floor here is ~5pp, not the ~1.5pp nominal.** `_ab_cam_A_duplicate` (6.67%)
+and `_ab_steps_steps4` (11.33%) are the *same configuration* at n=300; z = 2.00. Every camera
+and steps conclusion drawn from those arms was therefore only sensitive to effects above
+~10pp, and none of them should be treated as eliminated.
+
+**Two deviations from the vendored DROID recipe survive, both shared by Edge and Nano.**
+From `action_policy_droid_nano.py`:
+
+1. **`chunk_length=32`** (line 195), with the tokenizer's `encode_exact_durations=[33]` pinned
+   to match it (line 232) -- the architecture is configured around a 32-action chunk, not a
+   soft preference. Our `CosmosPolicyConfig.chunk_size` is **8**, and its own comment records
+   that the 8 was borrowed from pi0.5, not from Cosmos's recipe. The server generates 32 per
+   call and the client discards 24. This is also the only A/B arm ever tested that raised the
+   score -- 41.67% vs 33.33% -- at n=60, z=0.94: underpowered, not disproven.
+
+2. **`viewpoint="concat_view"  # wrist 480p (top) + L/R shoulder 320x180 (bottom)`** (line
+   214) -- two *distinct* shoulder views. The geometry we send is exactly right (wrist
+   640x360 on top, two exteriors at 320x180 below, composing the server's 640x540 default),
+   but `camera_names` requests only `exo_camera_1`, so the wrapper **duplicates** it into both
+   bottom slots. The camera A/B's distinct-view arm scored +3.66pp over duplicate --
+   directionally consistent with the recipe, and inside the noise floor above.
+
+Both would cap Edge and Nano identically, which is the signature we are looking for.
+
+**Testing order.** chunk first, on Pick-v1.5, n=300/arm (`scripts/cosmos_chunk_ab.sh`). The
+camera question cannot be tested there -- Pick-v1.5 exposes only 2 cameras
+(`exo_camera_1`, `wrist_camera`), so there is no distinct second exterior to select. It needs
+Pick-v2-classic, which sets up 5, at n=300 rather than the underpowered draws above.
