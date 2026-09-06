@@ -3045,3 +3045,43 @@ length (`encode_exact_durations=[33]`); pi05 and tiptop are not. Executing 8 of 
 its reference row was measured at, and that combination has never been run. If the arms match
 at n=300, dt and chunk die together and what remains is the reference row itself -- `run_path:
 /tmp/cosmos3_csv/...`, a temp directory, the least traceable provenance on the board.
+
+### Per-category structure of the Cosmos shortfall, and a pre-registered prediction
+
+The leaderboard source CSVs give a per-category breakdown, so the gap can be examined by
+object rather than only in aggregate. For `cosmos` on Pick-v1.5 against our `cosmos_nano` cell:
+
+**Composition is not a confound.** Reference and our cell have identical per-category totals
+(55 or 56 each, 1000 overall). We are running the same episode set, so `category_mix_check.py`
+has nothing to explain away here.
+
+**The rank ordering broadly agrees**: Spearman rho = 0.655 over 18 categories. Fruit is
+hardest for both (7.27% reference, 1.82% ours). The model is doing the same kind of thing,
+less well -- not something categorically different.
+
+**But the shortfall is not uniform.** Our rate as a fraction of reference has median 0.54 and
+ranges 0.25-0.92, and the spread tracks graspable geometry:
+
+| group | mean ours/ref | categories |
+|---|---|---|
+| narrow / upright | **0.43** | Bottle, Spray Bottle, Soap Dispenser, S/p Shaker, Remote Control, Knife, Fork, Spoon |
+| wide / open-top | **0.64** | Bowl, Box, Mug, Kettle, Cup, Pot, Ladle, Spatula, Tissue Paper, Fruit |
+
+Separation +0.21, Mann-Whitney z = 2.31. **Caveat: this grouping was formed after seeing the
+per-category ratios, so treat the z as descriptive, not as a clean p-value.** Wide top-graspable
+objects (Box 0.92, Bowl 0.80, Kettle 0.78) are nearly reproduced; tall narrow ones
+(Soap Dispenser 0.32, Bottle 0.33, Remote Control 0.37) are worst.
+
+That is the profile of a **control-fidelity** problem -- coarse or mistimed actuation degrades
+precision grasps on narrow objects while leaving easy top-grasps largely intact -- rather than
+a perception or language-grounding problem, which would not sort by object width.
+
+**Pre-registration for `scripts/cosmos_refproto_ab.sh`.** If executing the chunk the model was
+built to emit, at the rate its row was measured at, is the fix, then the `refproto` arm should
+raise the narrow/upright categories substantially more than the wide/open-top ones, compressing
+the 0.43-vs-0.64 split. If `refproto` instead lifts OVERALL roughly uniformly across
+categories, the improvement is real but the control-fidelity mechanism is wrong and the
+explanation lies elsewhere. If the arms match, dt and chunk die together.
+
+Stating this before the arms land makes the test sharper than an OVERALL number alone: three
+distinguishable outcomes rather than better/worse.
