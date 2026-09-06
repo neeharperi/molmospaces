@@ -45,11 +45,11 @@ export MLSPACES_FORCE_INSTALL=False
 export MLSPACES_PINNED_ASSETS_FILE="$PWD/reference/pinned_assets_20260816.json"
 EGL=$(awk -v g=$GPU '$1!~/^#/ && $1==g{print $2}' runs/_egl_mapping.txt)
 
-run_arm() {  # $1 = label   $2 = client-side chunk size
-  local arm="$1" chunk="$2"
-  local slog="runs/_servers/cosmos_chunk_ab_${arm}.log"
-  local clog="runs/cosmos_nano/$TASK/_ab_chunk_${arm}/eval_stdout.log"
-  echo "=== [$(date +%H:%M:%S)] arm $arm  (COSMOS_CHUNK_SIZE=$chunk) ==="
+run_arm() {  # $1 = label   $2 = client chunk size   $3 = policy dt in ms
+  local arm="$1" chunk="$2" dtms="$3"
+  local slog="runs/_servers/cosmos_proto_ab_${arm}.log"
+  local clog="runs/cosmos_nano/$TASK/_ab_proto_${arm}/eval_stdout.log"
+  echo "=== [$(date +%H:%M:%S)] arm $arm  (chunk=$chunk dt=${dtms}ms) ==="
   rm -f "$clog"
 
   # GATE 0 -- the override must actually resolve. Cheap, and catches a shadowed env var
@@ -61,10 +61,17 @@ run_arm() {  # $1 = label   $2 = client-side chunk size
   resolved=$(COSMOS_CHUNK_SIZE="$chunk" conda run -n mlspaces-classic --no-capture-output python -c \
     "from molmo_spaces.configs.policy_configs_baselines import CosmosPolicyConfig as C; print(f'__CHUNK__{C().chunk_size}__')" 2>/dev/null \
     | grep -o '__CHUNK__[0-9]*__' | tail -1 | sed 's/__CHUNK__//; s/__//')
+  local resolved_dt
+  resolved_dt=$(COSMOS_DT_MS="$dtms" conda run -n mlspaces-classic --no-capture-output python -c \
+    "from molmo_spaces.evaluation.configs.evaluation_configs import CosmosNanoPolicyEvalConfig as C; print(f'__DT__{C().policy_dt_ms}__')" 2>/dev/null \
+    | grep -o '__DT__[0-9.]*__' | tail -1 | sed 's/__DT__//; s/__//')
+  if [ "${resolved_dt%.0}" != "${dtms%.0}" ]; then
+    echo "  !! arm $arm ABORTED: COSMOS_DT_MS=$dtms resolved to '$resolved_dt'"; return 1
+  fi
   if [ "$resolved" != "$chunk" ]; then
     echo "  !! arm $arm ABORTED: COSMOS_CHUNK_SIZE=$chunk resolved to '$resolved'"; return 1
   fi
-  echo "  gate 0 ok: chunk_size resolves to $resolved"
+  echo "  gate 0 ok: chunk_size=$resolved dt=${resolved_dt}ms"
 
   CKPT=nvidia/Cosmos3-Nano-Policy-DROID GPU=$GPU PORT=$PORT \
     nohup bash scripts/serve_cosmos.sh >>"$slog" 2>&1 &
@@ -75,10 +82,10 @@ run_arm() {  # $1 = label   $2 = client-side chunk size
   exec 3<&-
   sleep 5
 
-  COSMOS_PORT=$PORT COSMOS_CHUNK_SIZE=$chunk LANE_GPU=$GPU MUJOCO_EGL_DEVICE_ID=$EGL \
+  COSMOS_PORT=$PORT COSMOS_CHUNK_SIZE=$chunk COSMOS_DT_MS=$dtms LANE_GPU=$GPU MUJOCO_EGL_DEVICE_ID=$EGL \
     conda run -n mlspaces-classic --no-capture-output \
       python scripts/eval.py --policy cosmos_nano --task "$TASK" \
-      --num_workers 4 --max_episodes $N --date "_ab_chunk_$arm" >/dev/null 2>&1 &
+      --num_workers 4 --max_episodes $N --date "_ab_proto_$arm" >/dev/null 2>&1 &
   local evalpid=$!
 
   # GATE 1 -- the client must talk to THIS server, not the campaign one on :8004.
@@ -91,7 +98,7 @@ run_arm() {  # $1 = label   $2 = client-side chunk size
   done
   if [ "$ok" != port ]; then
     echo "  !! arm $arm ABORTED: client not on :$PORT (saw $(grep -o 'localhost:[0-9]*' "$clog" 2>/dev/null | tail -1))"
-    kill $evalpid 2>/dev/null; pkill -f "_ab_chunk_$arm" 2>/dev/null
+    kill $evalpid 2>/dev/null; pkill -f "_ab_proto_$arm" 2>/dev/null
     pkill -f "serve_cosmos_policy.py .*--port $PORT" 2>/dev/null; return 1
   fi
   echo "  gate 1 ok: client on :$PORT. running..."
@@ -101,11 +108,13 @@ run_arm() {  # $1 = label   $2 = client-side chunk size
   sleep 25
 }
 
-run_arm chunk8  8
-run_arm chunk32 32
+# A = what the campaign has been running.  B = the protocol the leaderboard row was
+# produced under (dt 0.1) at the chunk length the recipe pins the tokenizer to (32).
+run_arm current  8  66
+run_arm refproto 32 100
 
 echo "=== nano chunk-size A/B complete (campaign 38.1%, leaderboard 66.5%) ==="
-for a in chunk8 chunk32; do
-  f="runs/cosmos_nano/$TASK/_ab_chunk_$a/results.csv"
+for a in current refproto; do
+  f="runs/cosmos_nano/$TASK/_ab_proto_$a/results.csv"
   [ -f "$f" ] && grep OVERALL "$f" | awk -v A="$a" -F, '{printf "  %-10s %4s/%-5s = %6s%%\n",A,$8,$4,$9}'
 done

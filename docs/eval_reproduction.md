@@ -2958,3 +2958,48 @@ What stands unchanged from the entry above: the cross-model Edge~Nano observatio
 retirement of the JSON prompt, the ~5pp noise floor, and `chunk_length=32` -- which remains a
 clean, recipe-explicit, architecture-pinned deviation and the only arm that ever moved the
 number up.
+
+### 2026-09-06 -- the leaderboard CSVs carry the reference protocol, and cosmos is the outlier
+
+`reference/README.md` records the per-(task, policy) source URLs
+(`https://molmospaces.allen.ai/benchmark/data/<task_slug>/<policy_slug>.csv`). Those files
+carry `# run_path`, `# dt` and `# max_steps` headers that the flattened
+`leaderboard_snapshot.csv` drops. Fetching them answers a question twelve hypotheses had been
+circling:
+
+| policy | `# dt` on mb_pick_msproc | `# run_path` |
+|---|---|---|
+| cosmos | **0.1** | `/tmp/cosmos3_csv/mb_pick_msproc` |
+| pi05 | 0.067 | `/weka/prior/abhayd/sim_cotraining_output/.../PiPnPBenchmarkEvalConfig/...` |
+| molmoact | 0.067 | `/weka/oe-training-default/hqfang/.../Molmoact2OracleSuccessEvalConfig/...` |
+| tiptop | 0.067 | `.` |
+
+**cosmos is the only policy whose row was produced at dt 0.1**, and it is 0.1 consistently
+across every task checked (mb_pick_msproc, mb_pick_classic, mb_pnp, ms_open, ms_close). Our
+`CosmosEdge/NanoPolicyEvalConfig` uses `policy_dt_ms = 66.0`, matching the *other* policies and
+the recipe's `fps=15.0` -- but not matching Cosmos's own reference row.
+
+This has the shared-bottleneck signature exactly: Cosmos-specific, identical for Edge and Nano
+(both read the same `COSMOS_DT_MS` default), and a protocol difference rather than a model
+property. It also interacts with `chunk_length`: at dt 0.1 a 32-action chunk covers 3.2s of
+motion, where our dt 0.067 with chunk 8 re-plans every 0.53s.
+
+Note `pi05` is 0.067 on Group B but **0.1 on ms_open**, so dt is per-(task, policy) on the
+leaderboard, not a global constant -- and our pi05 passes Open-v1 (20.7 vs 22.7) while running
+66ms against a 0.1 reference. So dt alone is not automatically outcome-determining. What makes
+cosmos different is that it is 0.1 *everywhere*, against our 66ms everywhere.
+
+`scripts/cosmos_refproto_ab.sh` therefore tests the reference protocol as a unit rather than
+one knob at a time, which is the right design given the ~5pp noise floor and a 28pp gap:
+
+  arm `current`  -- chunk 8,  dt 66ms   (what the campaign has run)
+  arm `refproto` -- chunk 32, dt 100ms  (the leaderboard row's dt, the recipe's chunk)
+
+If `refproto` closes most of the gap the cause is protocol, and every Cosmos cell needs
+re-running under it. If the two arms match at n=300, both deviations die together and the
+remaining explanation is the reference row itself -- whose `run_path` is `/tmp/cosmos3_csv/...`,
+a temp directory with no traceable eval config, the least reproducible provenance of any
+policy on the board.
+
+The earlier `_ab_C_dt100` arm (26.67% vs 33.33%) does not refute this: n=60, z~0.75, and it
+varied dt while holding chunk at 8 -- the combination the recipe never describes.
