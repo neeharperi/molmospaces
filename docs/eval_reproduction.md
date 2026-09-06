@@ -3236,3 +3236,36 @@ circumstantial rather than direct.
 
 The geometry signature and the Edge~Nano result are unaffected -- they stand on their own and
 remain the strongest facts in this investigation.
+
+### The episode cap is a function of chunk_size -- and it is shared with a policy that passes
+
+Following the cap of 39 across policies on Pick-v1.5:
+
+| policy | chunk_size | max episode length |
+|---|---|---|
+| cosmos_nano | 8 | 39 |
+| cosmos_edge | 8 | 39 |
+| pi05_droid | 8 | 39 |
+| pi0_droid | 8 | 39 |
+| molmoact2_droid | 24 | 22 |
+| dreamzero | -- | 304 |
+| tiptop | -- | 1001 |
+
+Every chunk-8 policy caps at exactly 39; the chunk-24 policy caps at 22. So the cap is a
+function of `chunk_size`, not a fixed step or call budget (39x8=312 against 22x24=528, and
+39 != 22, so neither product nor count is conserved -- the exact relation was not pinned down
+and is not decision-relevant).
+
+**The decision-relevant part is that pi05 and pi0 sit at chunk 8 and cap 39 alongside Cosmos,
+and pi05 reproduces its leaderboard entry.** Whatever the cap is, Cosmos shares it exactly with
+a policy that passes, so it cannot by itself explain the Cosmos deficit. This closes the
+horizon line as an independent explanation.
+
+It does leave one live mechanism: because the cap moves with `chunk_size`, the `refproto` arm
+(chunk 32) will not merely re-plan less often -- it will change the episode's structure and
+duration too. That is measured directly by the A/B rather than argued about here, and it is why
+the `timeonly` arm exists to separate duration from control granularity.
+
+Net effect of this thread: the horizon hypothesis is closed as an independent cause, the
+chunk_size arm gained a mechanism, and the two facts that started the line -- Edge~Nano and the
+geometry signature -- are untouched.
