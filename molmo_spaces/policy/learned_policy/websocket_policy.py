@@ -9,6 +9,11 @@ from molmo_spaces.policy.base_policy import InferencePolicy
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on a single inference round-trip. Not a latency target -- it exists so a server
+# that stays connected but stops answering fails the episode instead of blocking the worker
+# forever. Cosmos, the slowest consumer of this path, measures 1-2s per inference.
+INFERENCE_RECV_TIMEOUT_SECS = 600
+
 
 class WebsocketPolicy(InferencePolicy):
     """Implements the Policy interface by communicating with a server over websocket.
@@ -110,7 +115,12 @@ class WebsocketPolicy(InferencePolicy):
         self.prepare_model()
         data = msgpack_numpy.packb(model_input)
         self._ws.send(data)
-        response = self._ws.recv()
+        # Bounded, like the recv()s in prepare_model above. An unbounded recv() here wedges
+        # the calling worker permanently if the server stays up but stops answering -- the
+        # failure that cost tiptop/PnP-NextTo-v2 29 hours on three workers. This path serves
+        # cosmos (1-2s per inference) and pi, so 600s is far above any real call and only
+        # fires when the server has genuinely stopped responding.
+        response = self._ws.recv(timeout=INFERENCE_RECV_TIMEOUT_SECS)
         if isinstance(response, str):
             # we're expecting bytes; if the server sends a string, it's an error.
             raise RuntimeError(f"Error in inference server:\n{response}")

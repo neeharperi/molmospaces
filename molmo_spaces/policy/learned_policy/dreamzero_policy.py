@@ -27,6 +27,18 @@ logging.basicConfig(level=logging.INFO)
 PING_INTERVAL_SECS = 60
 PING_TIMEOUT_SECS = 600
 
+# Bound every recv(). websockets.sync's recv() blocks forever, and the reconnect path below
+# only covers a server that has CLOSED the connection -- a server that stays up and never
+# answers is a different failure. That is what wedged three workers of tiptop/PnP-NextTo-v2
+# for 29 hours on 2026-09-04 (see tiptop_policy.py); this client had the identical shape.
+# It matters more here: the DreamZero lane runs at --num_workers 1 because the AR state in
+# socket_test_optimized_AR.py is a single instance attribute, so there is no second worker to
+# carry the cell and a wedge stalls the lane outright -- with 7 Group-B cells still pending.
+#
+# Measured DreamZero inference is 8.8-9.3s, so 600s is ~65x headroom and still turns a
+# permanent wedge into a failed episode the pipeline can move past.
+RECV_TIMEOUT_SECS = 600
+
 
 class DreamZeroWebsocketClient:
     """Websocket client that adds endpoint field for DreamZero server."""
@@ -46,7 +58,7 @@ class DreamZeroWebsocketClient:
             ping_interval=PING_INTERVAL_SECS,
             ping_timeout=PING_TIMEOUT_SECS,
         )
-        metadata = msgpack_numpy.unpackb(conn.recv())
+        metadata = msgpack_numpy.unpackb(conn.recv(timeout=RECV_TIMEOUT_SECS))
         return conn, metadata
 
     def _wait_for_server(self) -> tuple[websockets.sync.client.ClientConnection, dict]:
@@ -81,12 +93,12 @@ class DreamZeroWebsocketClient:
         data = self._packer.pack(obs)
         try:
             self._ws.send(data)
-            response = self._ws.recv()
-        except websockets.exceptions.ConnectionClosedError:
-            logging.warning("ConnectionClosedError during infer. Reconnecting and retrying...")
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
+        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
+            logging.warning(f"{type(e).__name__} during infer. Reconnecting and retrying...")
             self._reconnect()
             self._ws.send(data)
-            response = self._ws.recv()
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
         if isinstance(response, str):
             raise RuntimeError(f"Error in inference server:\n{response}")
         return msgpack_numpy.unpackb(response)
@@ -98,12 +110,12 @@ class DreamZeroWebsocketClient:
         data = self._packer.pack(reset_info)
         try:
             self._ws.send(data)
-            response = self._ws.recv()
-        except websockets.exceptions.ConnectionClosedError:
-            logging.warning("ConnectionClosedError during reset. Reconnecting and retrying...")
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
+        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
+            logging.warning(f"{type(e).__name__} during reset. Reconnecting and retrying...")
             self._reconnect()
             self._ws.send(data)
-            response = self._ws.recv()
+            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
         return response
 
 
