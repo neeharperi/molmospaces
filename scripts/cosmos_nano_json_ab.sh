@@ -36,15 +36,53 @@ run_arm() {  # $1 = label   $2 = extra server args
   done
   (exec 3<>/dev/tcp/127.0.0.1/$PORT) 2>/dev/null || { echo "  !! never bound :$PORT"; return 1; }
   exec 3<&-
-  # assert the prompt form actually changed rather than trusting the flag
   sleep 5
-  echo "  server up. prompt form will be asserted from the log after first inference."
-
+  local elog="runs/_servers/cosmos_nano_json_ab_${arm}_client.log"
   COSMOS_PORT=$PORT LANE_GPU=$GPU MUJOCO_EGL_DEVICE_ID=$EGL \
     conda run -n mlspaces-classic --no-capture-output \
       python scripts/eval.py --policy cosmos_nano --task "$TASK" \
-      --num_workers 4 --max_episodes $N --date "_ab_nanojson_$arm" 2>&1 | tail -4
+      --num_workers 4 --max_episodes $N --date "_ab_nanojson_$arm" >"$elog" 2>&1 &
+  local evalpid=$!
 
+  # GATE 1 -- the client must connect to THIS server, not the campaign one.
+  # CosmosNanoPolicyEvalConfig used to hardcode port=8004, silently shadowing COSMOS_PORT;
+  # both arms then ran against the plaintext campaign server, the arm-server log stayed
+  # empty, and the post-hoc `grep prompt=` below printed nothing without failing. Two
+  # identical arms would have come back as a clean null. Gate early and loudly instead.
+  local ok=""
+  for _ in $(seq 1 90); do
+    grep -q "Cosmos model at localhost:$PORT" "$elog" 2>/dev/null && { ok=port; break; }
+    grep -qE "Cosmos model at localhost:(8003|8004)" "$elog" 2>/dev/null && { ok=wrong; break; }
+    kill -0 $evalpid 2>/dev/null || break
+    sleep 10
+  done
+  if [ "$ok" != port ]; then
+    echo "  !! arm $arm ABORTED: client not on :$PORT (saw: $(grep -o 'localhost:[0-9]*' "$elog" | tail -1))"
+    kill $evalpid 2>/dev/null; pkill -f "_ab_nanojson_$arm" 2>/dev/null
+    pkill -f "serve_cosmos_policy.py .*--port $PORT" 2>/dev/null
+    return 1
+  fi
+
+  # GATE 2 -- the prompt form must actually be what this arm claims. '{' => JSON.
+  local ch=""
+  for _ in $(seq 1 60); do
+    ch=$(grep -o "prompt='." "$slog" 2>/dev/null | tail -1 | sed "s/.*prompt='//")
+    [ -n "$ch" ] && break
+    kill -0 $evalpid 2>/dev/null || break
+    sleep 10
+  done
+  local want_json=no; [ "$arm" = B_json ] && want_json=yes
+  local got_json=no; [ "$ch" = "{" ] && got_json=yes
+  if [ -z "$ch" ] || [ "$got_json" != "$want_json" ]; then
+    echo "  !! arm $arm ABORTED: prompt form mismatch (want json=$want_json, first char='$ch')"
+    kill $evalpid 2>/dev/null; pkill -f "_ab_nanojson_$arm" 2>/dev/null
+    pkill -f "serve_cosmos_policy.py .*--port $PORT" 2>/dev/null
+    return 1
+  fi
+  echo "  gates passed: client on :$PORT, prompt json=$got_json. running..."
+
+  wait $evalpid
+  tail -4 "$elog"
   echo -n "  prompt form seen: "
   grep -o "prompt='.\{0,30\}" "$slog" | tail -1
   pkill -f "serve_cosmos_policy.py .*--port $PORT" 2>/dev/null

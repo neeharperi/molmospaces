@@ -268,7 +268,12 @@ class CosmosNanoPolicyEvalConfig(JsonBenchmarkEvalConfig):
     robot_config: FrankaRobotConfig = FrankaRobotConfig()
     policy_config: CosmosPolicyConfig = CosmosPolicyConfig(
         checkpoint_path="nvidia/Cosmos3-Nano-Policy-DROID",
-        remote_config=dict(host="localhost", port=8004),
+        # Same COSMOS_PORT override contract as the Edge config: a hardcoded 8004 here
+        # silently shadowed it, so scripts/cosmos_nano_json_ab.sh's arms both connected to
+        # the campaign server instead of their own and the A/B measured nothing.
+        remote_config=dict(
+            host="localhost", port=int(os.environ.get("COSMOS_PORT", "8004"))
+        ),
     )
     policy_dt_ms: float = float(os.environ.get("COSMOS_DT_MS", "66.0"))
     end_on_success: bool = True
