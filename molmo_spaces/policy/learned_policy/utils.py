@@ -208,6 +208,53 @@ class PromptSampler:
         return self.get_short_description(self.get_target_object_uid(task))[0]
 
 
+# Observation keys that can carry the same physical view, most-specific first. MuJoCo renders
+# every camera in the benchmark's camera set, so several of these can be present in a single
+# observation at once -- first match wins, and the last entry is the plain-benchmark fallback.
+DROID_EXTERIOR_CAMERA_KEYS = ("droid_shoulder_light_randomization", "exo_camera_1")
+DREAMZERO_EXTERIOR_CAMERA_KEYS = ("randomized_zed2_analogue_1", "exo_camera_1")
+WRIST_CAMERA_KEYS = ("wrist_camera_zed_mini", "wrist_camera")
+
+
+def first_present_camera(obs, candidates: tuple[str, ...]) -> str:
+    """First key of ``candidates`` present in ``obs``, falling back to the last candidate."""
+    return next((key for key in candidates if key in obs), candidates[-1])
+
+
+def resolve_camera_keys(
+    obs,
+    camera_names: list[str] | None = None,
+    exterior_candidates: tuple[str, ...] = DROID_EXTERIOR_CAMERA_KEYS,
+) -> tuple[str, str]:
+    """Return the ``(exterior, wrist)`` observation keys a policy should read.
+
+    ``camera_names`` is eval_main.py's ``--camera_names`` override (None when unset). An
+    explicit choice is trusted as-is rather than auto-detected, since MuJoCo renders every
+    camera in the benchmark's full camera set regardless of which one the policy is meant to
+    read -- auto-detection would happily pick a camera the override was trying to avoid.
+
+    Note this is a deliberate semantic change from the inlined versions this replaced: those
+    keyed on ``camera_names != ["exo_camera_1", "wrist_camera"]``, so passing that literal
+    pair meant "auto-detect". Here it means "use exactly these", which on a filament
+    observation resolves to a *different* camera than auto-detection would. Nothing passes it
+    today (the default is None, and Pick-v2-RandCam is the only task that sets --camera_names),
+    but do not reintroduce it as a config default expecting the old behaviour.
+    """
+    if camera_names:
+        # eval_main.py's --camera_names is nargs="+", so a one-element value reaches here and
+        # would otherwise IndexError on the first step of every episode, pointing at this
+        # shared helper rather than at the flag that was actually wrong.
+        if len(camera_names) != 2:
+            raise ValueError(
+                f"camera_names must be [exterior_camera_key, wrist_camera_key], got "
+                f"{camera_names!r}. Pass exactly two names to --camera_names."
+            )
+        return camera_names[0], camera_names[1]
+    return first_present_camera(obs, exterior_candidates), first_present_camera(
+        obs, WRIST_CAMERA_KEYS
+    )
+
+
 def resize_with_pad(images, height, width):
     if images.shape[-3:-1] == (height, width):
         return images

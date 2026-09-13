@@ -41,6 +41,8 @@ from eval_common import (
     GROUP_B_LEADERBOARD_TASK_NAME,
     REPRODUCTION_POLICIES,
     TASKS,
+    latest_results_csv,
+    read_overall,
     wilson_interval,
 )
 
@@ -48,37 +50,6 @@ METRIC_TO_COLUMNS = {
     "at-end": ("successes", "total"),
     "oracle": ("oracle_successes", "total"),
 }
-
-
-def latest_results_csv(runs_dir: Path, policy: str, task: str) -> Path | None:
-    """Newest real results.csv for a cell, ignoring underscore-prefixed date directories.
-
-    A leading underscore marks a directory as not-a-campaign-result. The convention already
-    existed at the policy level (`_handshake/`, `_INVALID_*`, `_superseded_*`, which
-    check_provenance.py skips by the same rule) but was not applied to the date level, and the
-    omission actively corrupted output: `_` is 0x5F, which sorts AFTER digits, so a 60-episode
-    A/B arm in `_ab_C_dt100/` beat the real `20260828_full/` cell to `candidates[-1]` and was
-    reported as cosmos_edge's Pick-v1.5 verdict -- 26.7% (n=60) in place of 33.8% (n=1000).
-
-    Same failure this project hit with the n=1 handshake cells, which "PASSED" everything
-    because a Wilson interval at n=1 spans the range. Diagnostic runs must be inert to the
-    comparison, not merely distinguishable by a human reading directory names.
-    """
-    cell_dir = runs_dir / policy / task
-    if not cell_dir.exists():
-        return None
-    candidates = sorted(
-        c for c in cell_dir.glob("*/results.csv") if not c.parent.name.startswith("_")
-    )
-    return candidates[-1] if candidates else None
-
-
-def read_overall(results_csv: Path) -> pd.Series:
-    df = pd.read_csv(results_csv, comment="#")
-    overall = df[df["category"] == "OVERALL"]
-    if overall.empty:
-        raise ValueError(f"{results_csv} has no OVERALL row")
-    return overall.iloc[0]
 
 
 def successes_and_total(overall: pd.Series, metric: str) -> tuple[int, int]:

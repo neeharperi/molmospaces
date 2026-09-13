@@ -84,9 +84,15 @@ def run_cell(
     task_horizon_steps: int | None,
     max_episodes: int | None,
     num_workers: int | None,
+    checkpoint_path: str | None = None,
 ) -> bool:
     task = TASKS[task_name]
     policy = POLICIES[policy_name]
+    # PolicySpec.checkpoint_path is the *static* default for the released checkpoint. When a
+    # server is deliberately loaded with something else -- a fine-tune ladder rung, a base
+    # checkpoint probe -- provenance must record what was actually served, not the default.
+    # Without this the ladder's gate cells all claim to have evaluated pi05_droid_jointpos.
+    served_checkpoint = checkpoint_path if checkpoint_path is not None else policy.checkpoint_path
 
     cell_dir = runs_dir / policy_name / task_name / date
     provenance_path = cell_dir / "provenance.json"
@@ -117,12 +123,12 @@ def run_cell(
         "--no_wandb",
         *task.extra_flags,
     ]
-    if policy.checkpoint_path:
+    if served_checkpoint:
         # Some policies (e.g. tiptop) have no client-side checkpoint_path field at all --
         # the server owns its own model/planner state -- so PiPolicyConfig-style configs
         # without this field would reject an undeclared-attribute assignment in
         # eval_main.py's create_eval_config(). Only pass it when the policy actually has one.
-        eval_cmd += ["--checkpoint_path", policy.checkpoint_path]
+        eval_cmd += ["--checkpoint_path", served_checkpoint]
     if task_horizon_steps is not None:
         eval_cmd += ["--task_horizon_steps", str(task_horizon_steps)]
     if max_episodes is not None:
@@ -180,7 +186,10 @@ def run_cell(
         "policy": policy_name,
         # None (not "") for server-managed policies like tiptop with no client-side
         # checkpoint path -- distinguishes "genuinely has none" from "forgot to set it".
-        "policy_checkpoint": policy.checkpoint_path or None,
+        "policy_checkpoint": served_checkpoint or None,
+        # True when --checkpoint_path overrode PolicySpec's default, so a reader can tell a
+        # ladder/probe cell from a released-checkpoint cell without diffing paths by eye.
+        "policy_checkpoint_overridden": checkpoint_path is not None,
         "task": task_name,
         "benchmark_dir": str(benchmark_dir),
         "eval_command": " ".join(eval_cmd),
@@ -212,6 +221,13 @@ def main() -> None:
     parser.add_argument("--task_horizon_steps", type=int, default=None, help="Passed through to eval_main.py.")
     parser.add_argument("--max_episodes", type=int, default=None, help="Passed through to eval_main.py, useful for smoke tests.")
     parser.add_argument("--num_workers", type=int, default=None, help="Passed through to eval_main.py.")
+    parser.add_argument(
+        "--checkpoint_path",
+        default=None,
+        help="Override the policy's default checkpoint path. Use when the server was started "
+        "with a non-default checkpoint (e.g. a fine-tune ladder rung) so provenance records "
+        "what was actually served rather than PolicySpec's static default.",
+    )
     args = parser.parse_args()
 
     policy_names = sorted(POLICIES) if args.all_policies else ([args.policy] if args.policy else None)
@@ -235,6 +251,7 @@ def main() -> None:
                 task_horizon_steps=args.task_horizon_steps,
                 max_episodes=args.max_episodes,
                 num_workers=args.num_workers,
+                checkpoint_path=args.checkpoint_path,
             )
             results.append((policy_name, task_name, ok))
 

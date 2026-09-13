@@ -3395,3 +3395,817 @@ control, verify the mechanism it controls for actually exists in the code.**
 help? `scripts/cosmos_chunk_valid_ab.sh` tests exactly that -- chunk 8 vs chunk 32, dt 66,
 **no horizon override**, n=300/arm. It carries a third gate that aborts if a horizon override
 ever leaks in again.
+
+---
+
+## 2026-09-11 -- Working-tree regression check, and why exact replay needs an XLA flag
+
+Context: 25 uncommitted files (+259/-437) touched the policy wrappers and the pydantic policy
+configs. The question was whether the archived `20260828_full` numbers still stand for the code
+as it is now, without re-running the 9x3 sweep.
+
+### Chain of custody: the archived cells were produced by code equivalent to HEAD
+
+The 33 archived cells carry **21 distinct `molmospaces_git_sha` values** -- the campaign ran for
+weeks while the repo moved, so there is no single baseline tree. Diffing each cell's SHA to HEAD
+over that policy's code path, every cell reports drift in
+`policy_configs_baselines.py` + `evaluation_configs.py`. That drift is **entirely Cosmos removal**:
+for `0d4de8e9` the diff is 0 added lines and every hunk is a Cosmos class deletion; the only
+additions anywhere in the window (9 lines, at `97ea88f3`/`f53c3e53`) are DreamZero's
+`DREAMZERO_PORT` env var. Nothing touching pi05/pi0/molmoact2 changed. So HEAD is a valid baseline
+and the A/B reduces to HEAD vs working tree.
+
+### The camera-key refactor is a no-op as configured
+
+`resolve_camera_keys` replaced an inlined predicate in `pi_policy.py` and `molmoact2_policy.py`.
+Measured against the old logic:
+
+| `camera_names` | new | old |
+|---|---|---|
+| `None` (5-cam rig) | `(droid_shoulder_light_randomization, wrist_camera_zed_mini)` | same |
+| `None` (2-cam rig) | `(exo_camera_1, wrist_camera)` | same |
+| RandCam pair | passes through | same |
+| **literal `["exo_camera_1","wrist_camera"]`** | **returns it verbatim** | **auto-detected** |
+| len != 2 | `ValueError` | `IndexError` |
+
+Only the literal row diverges, and it is unreachable: the default is now `None`, and
+`Pick-v2-RandCam` is the only task passing `--camera_names` (two names). Recorded in the
+`resolve_camera_keys` docstring so it is not reintroduced as a config default.
+
+A full `model_dump()` diff of all five eval configs, HEAD vs working tree, contains **nothing but
+`camera_names`** (null on five configs; previously the literal pair on three). `policy_dt_ms`,
+`end_on_success`, ports and checkpoint paths are unchanged -- which settles the
+`Pi0PolicyEvalConfig` reparenting too. `eval.py --dry-run` emits identical commands on
+Pick-v1.5 / Pick-v2-RandCam / Open-v1, and `compare_to_leaderboard.py`, `check_provenance.py` and
+`campaign_status.py` all produce identical output on the frozen `runs/` tree.
+
+> Two harness traps found while building this, both of which produce a *false* pass:
+> 1. `molmo_spaces` is an editable install whose finder hard-codes the main checkout
+>    (`MAPPING = {'molmo_spaces': '/data/neehar/Workspace/molmospaces/molmo_spaces'}`). A
+>    `git worktree` alone does **not** isolate it: `eval.py` runs `eval_main.py` with
+>    `sys.path[0] = <script dir>`, so the import falls through to the editable finder and loads
+>    working-tree code. `PYTHONPATH=<worktree>` wins (the finder is *appended* to `sys.meta_path`,
+>    after `PathFinder`) and is mandatory on the baseline arm.
+> 2. `check_provenance.py` resolves `results_csv` relative to **cwd**, and `campaign_status.py`
+>    resolves `runs_dir` relative to its own `__file__`. Comparing two trees without pinning both
+>    produces large spurious diffs.
+
+### Exact replay is impossible by default -- XLA autotuning, not the policy RNG
+
+openpi seeds its sampler with `jax.random.key(0)` (`policies/policy.py:65`) and splits per call,
+so a fresh server at `--num_workers 1` should replay exactly. It does not. Two runs of **identical
+code**, each against a freshly restarted server, flipped **6 of 30 episodes** on
+`pi05_droid/Pick-v1.5` (5/30 vs 7/30 successes, same episode set).
+
+Isolating it: one fixed observation sent to three freshly restarted servers returned actions that
+agreed **bitwise on runs 2 and 3** but differed from run 1 in the 4th decimal. That is XLA
+autotuning selecting a different (equally valid) kernel at first compile. A ~1e-3 action
+difference then compounds through a 500-step closed-loop rollout until outcomes flip.
+
+With `XLA_FLAGS="--xla_gpu_autotune_level=0 --xla_gpu_deterministic_ops=true"` the same probe
+returned identical bytes **3/3**. This is now opt-in as `DETERMINISTIC=1` in
+`scripts/serve_openpi.sh`, deliberately **off by default**: it changes which kernels run, and every
+archived result was produced without it, so enabling it globally would silently make new numbers
+non-comparable to the campaign. Turn it on for *both* arms of a comparison, never one.
+
+Cost: deterministic kernels run roughly 2x slower (~40 s/episode vs ~19 s/episode on Pick-v1.5).
+
+**MolmoAct2 cannot be replay-tested at all.** `host_server_droid.py:202` calls `predict_action`
+without `generator=`, so sampling draws from the global torch RNG, which PyTorch seeds from OS
+entropy per process. Its wrapper changes are covered by the static checks above instead; the only
+MolmoAct2-specific change beyond the shared camera refactor is the removal of a `last_exc`
+variable and a trailing `raise last_exc`, which is sound because the retry loop's final attempt
+ends in a bare `raise`.
+
+### openpi base->DROID fine-tuning: data pipeline validated
+
+Adding training to this repo (which `plans/BENCHMARK.md:105` had scoped out) needs the DROID RLDS
+tree to feed openpi's loader. Three things assumed to be blockers were tested and are not:
+
+1. **No TFDS fixup is needed.** `tfds.builder("droid", data_dir="/data/neehar/Workspace/molmospaces",
+   version="1.0.1")` resolves to `.../droid/1.0.1`, reports `name=droid_101 version=0.0.1`,
+   95,658 episodes, 2048 shards, and `file[0] = droid_101-train.tfrecord-00000-of-02048`. The
+   *directory* name is the lookup key; the internal name only drives the shard filename template,
+   and it matches what is on disk. No symlink tree, no metadata edit.
+2. **The `multi_rlds_dataset.py` defects are avoidable.** `data_loader.py:170` dispatches there
+   only when `data_config.datasets is not None`. Leaving it unset gives the clean upstream
+   `DroidRldsDataset`, so the `ds_name.split(":")` crash and the weights-sum assertion are never
+   reached and `droid_near_domain_dataset` (absent here) is not needed.
+3. **The idle filter matches this RLDS build.** It has exactly 95,658 keys -- the episode count --
+   and 15/15 sampled episodes resolved with 0 misses, keeping 84-100% of frames. A key mismatch
+   would have silently starved training to zero frames, which was the top risk.
+
+The hash table builds in **5.6 s**, not the tens of minutes feared.
+
+**Norm stats: reuse the reference, do not recompute.** `gs://openpi-assets/checkpoints/pi05_base/assets/droid`
+carries joint-*velocity* stats -- `actions.std[:7]` is **1.63x larger** than
+`checkpoints/pi05_droid_jointpos/assets/droid` -- so training from base against base assets would
+mis-scale every target. The configs point `assets_dir` at the reference jointpos assets, which is
+what the published entry was trained and is served with.
+
+That choice is independently confirmed by the data: measured raw per-dim std of the delta action
+chunk is `[0.084, 0.214, 0.089, 0.201, ...]` against the reference stats' `[0.094, 0.175, 0.093,
+0.157, ...]`. The reference stats were computed on exactly this quantity.
+
+**Batch assertions (S3/S4), pi05 config:** `actions (128,15,32) float32`, `state (128,32)`, images
+`(128,224,224,3)` in `[-1,1]`, masks `base_0_rgb=True left_wrist_0_rgb=True right_wrist_0_rgb=False`,
+tokens `(128,200)`. Raw joint deltas `|a|` mean 0.128 rad / max 1.46; gripper stays in `[0,1]`
+absolute, confirming `make_bool_mask(7, -1)`. Normalized `|a|` mean over the **real 8 dims** is
+**0.359**, in the expected 0.3-1.5 band.
+
+> Gotcha worth recording: computing that mean over the full **32-dim padded** action vector gives
+> 0.073 and looks like a 4x normalisation failure. 24 of the 32 dims are zero padding from
+> `PadStatesAndActions`. Always slice to the real action dim before judging normalisation.
+
+**Two measured operational costs.** `droid_rlds_dataset.py:206` calls `dataset.shuffle(250_000)`
+**unconditionally** -- it is not guarded by the `shuffle` argument and `shuffle_buffer_size` is not
+plumbed through `TrainConfig`. Time-to-first-batch is therefore **~24 minutes**, paid on every
+launch *and every resume*, and the buffer costs **>200 GB RSS** per process (the naive estimate is
+86 GB). Two concurrent training runs need ~450 GB of the host's 2 TB -- fine, but it is the reason
+a third concurrent job would not fit.
+
+### Verdict: the working tree is byte-identical to HEAD
+
+All arms `pi05_droid/Pick-v1.5`, `--num_workers 1 --max_episodes 30` (exactly 30 episodes, no
+oversampling), fresh `DETERMINISTIC=1` server per arm, `runs/.../_det*` so they stay inert.
+
+| arm | tree | successes | outcomes |
+|---|---|---|---|
+| `_ctrl1` / `_ctrl2` | working tree, **no** det flags | 5/30, 7/30 | **6 episodes flipped** |
+| `_det1` / `_det2` | working tree, det flags | 7/30, 7/30 | **IDENTICAL 30/30** |
+| `_detHEAD` vs `_det1` | HEAD vs working tree, det flags | 7/30, 7/30 | **IDENTICAL 30/30** |
+
+Control clean, test identical -> the noise floor is exactly zero and the test result is real.
+
+Strengthened past outcome parity with a step-level hash of `actions/commanded_action` over every
+trajectory (path-and-traj keyed, timestamp dir stripped): HEAD, working tree and the working-tree
+repeat all give `355fa2176d1dcc6b...`, 30 trajectories / **1022 steps**. Every commanded action on
+every step is byte-identical. That is the check that would catch a wrong camera key which happened
+not to flip an outcome.
+
+Baseline isolation was asserted, not assumed: under `PYTHONPATH=<worktree>` the HEAD arm reports
+`resolve_camera_keys` **absent** and `PiPolicyConfig().camera_names == ['exo_camera_1','wrist_camera']`
+(the old default). Without that assertion the arm silently loads working-tree code and returns a
+false IDENTICAL.
+
+**Scope.** This covers pi05/pi0 (shared wrapper) on the 2-camera rig end-to-end. It does **not**
+cover: molmoact2 (unseeded torch RNG - static tier only), tiptop/dreamzero (no/partial leaderboard
+coverage; the new `endpoint_ws_client.py` reconnect path only runs when a server dies), the
+5-camera auto-detect branch end-to-end (proven statically, and PnP-NextTo-v2 costs 285 s/ep at one
+worker vs Pick-v1.5's 19 s/ep), and Group A, where `--max_episodes` oversamples and no cheap arm
+exists. The 24/29 all-PASS leaderboard verdict is unchanged and was re-run on the working tree.
+
+### Measured training throughput: ~4.3 s/step, ~10 days per model
+
+Smoke run `pi05_droid_jointpos_from_base_smoke`, bs128, `fsdp_devices=2`, GPUs 0-1 (one NVLink
+pair), `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9`. It runs -- no OOM at 64 samples/device -- and both
+GPUs sit at 100% util, so this is compute-bound.
+
+**Steady state is 4.3 s/it** (steps 97 and 100, consecutive clean samples).
+
+> Do not read the rate straight off the bar after a save. The sample at step 101 reported
+> `24.5s/it` and a 6-hour ETA; that interval contained the 15.5 s blocking checkpoint write
+> (12.5 GiB at 837 MiB/s), and the reading decayed 24.5 -> 20.5 -> 10.1 over the next few steps.
+> Taken at face value it would have implied 57 days per model and killed the plan.
+
+At 4.3 s/it: `200_000 x 4.3 s = 9.95 days` per model. The two models occupy separate NVLink pairs
+and run concurrently, so **~10 days for both**, plus ~9-24 min of startup per launch. Running
+bs256 on all four GPUs for 100k steps instead costs about the same total, sequentially.
+
+**Observability fix.** `scripts/train.py` logged the loss with `pbar.write`, but `init_logging()`
+installs `tqdm_loggable`'s handler (`import tqdm_loggable.auto as tqdm`), which reroutes the bar
+through `logging` and leaves `pbar.write` going to a stream nothing captures -- the loss was
+absent from the run log entirely, making the convergence and oracle assertions impossible.
+Changed to `logging.info`.
+
+### Open anomaly: the reference DROID checkpoint does not fit real DROID
+
+The oracle control (a run initialised from the already-DROID checkpoint should show a much *lower*
+step-0 loss than one from base) came out **inverted**, on identical data with identical norm stats,
+both checkpoints restoring cleanly:
+
+| start weights | step 0 loss | step 100 loss | grad_norm |
+|---|---|---|---|
+| `gs://openpi-assets/checkpoints/pi05_base` | **0.0408** | 0.0327 | 0.13 |
+| `checkpoints/pi05_droid_jointpos` (the served reference) | **3.2062** | 1.9325 | 27.9 |
+
+The DROID-finetuned checkpoint scores ~78x *worse* on real DROID than base.
+
+First hypothesis was sim-cotraining: the leaderboard's pi05 Group B rows come from
+`/weka/prior/abhayd/sim_cotraining_output/...` (recorded at `compare_to_leaderboard.py:90` and
+`docs/eval_reproduction.md:957`), and our checkpoint comes from `gs://openpi-assets-**simeval**/`.
+If the reference is tuned on MolmoSpaces sim rather than real DROID, a real-DROID fine-tune would
+never reproduce its leaderboard numbers -- which would invalidate the whole reproduction premise.
+
+**That hypothesis is weakened by the norm stats.** Measured over 23,040 real DROID frames against
+the reference `norm_stats.json`:
+
+| | j0 | j1 | j2 | j3 | j4 | j5 | j6 |
+|---|---|---|---|---|---|---|---|
+| measured std | 0.0859 | 0.1874 | 0.0903 | 0.1541 | 0.1466 | 0.1639 | 0.1614 |
+| reference std | 0.0944 | 0.1747 | 0.0933 | 0.1573 | 0.1462 | 0.1570 | 0.1711 |
+| ratio | 0.91 | 1.07 | 0.97 | 0.98 | 1.00 | 1.04 | 0.94 |
+
+Quantiles agree comparably. So the reference assets *were* computed on real DROID, and our data
+pipeline reproduces that distribution. The anomaly is in the **weights**, not the data.
+
+Remaining candidate explanations, in order of how cheaply they can be killed:
+1. **The weights did not actually load.** `CheckpointWeightLoader` matching a differently-structured
+   param tree could leave layers at init while still reporting a successful restore. The decisive
+   test is a random-init control: if random weights also score ~3.2, this is a loading failure in
+   the training config -- our bug -- not a property of the checkpoint. (Serving is unaffected: the
+   archived runs score 23.3% on Pick-v1.5 with this checkpoint, so the weights are fine *there*.)
+2. The weights really are sim-tuned despite real-DROID norm stats.
+3. `loss=0.0408` from base is degenerate and the metric is not discriminating.
+
+Controls running: `diag_randinit` (no weight loader) and `diag_pi05_official_vel`
+(`gs://openpi-assets/checkpoints/pi05_droid`, joint-velocity space with its own assets).
+
+**No long training run has been started.** This is deliberate: at ~10 days per model the question
+of whether the target is even reachable has to be settled first.
+
+**Loading ruled out.** `pi05_base` and `pi05_droid_jointpos` flatten to **identical key sets (51
+keys) with identical shapes**, so `_merge_params` drops nothing. (Worth knowing anyway:
+`CheckpointWeightLoader` fills a reference key missing from the checkpoint only when it matches
+`.*lora.*`; any other missing key is silently *dropped* from the returned tree.)
+
+Loss ladder on identical real-DROID data with identical norm stats, weights the only variable:
+
+| weights | loss |
+|---|---|
+| `pi05_base` | 0.041 |
+| `gs://openpi-assets/checkpoints/pi05_droid` (velocity space, own assets) | 1.54 |
+| **random init** | **2.05** |
+| `pi05_droid_jointpos` (the served reference) | 3.21 |
+
+The reference scores *worse than random* on real DROID while scoring 23.3% on the sim benchmark --
+so its weights are fine for the task the leaderboard measures. Real-DROID loss and sim success are
+measuring different things.
+
+**Resolution: real-DROID loss is not a valid proxy for this benchmark.** Serving `pi05_base` itself
+through the unmodified harness (`CONFIG=pi05_droid_jointpos`, `CKPT_DIR` pointed at pi05_base
+params + the jointpos DROID assets, `DETERMINISTIC=1`), same 30-episode Pick-v1.5 cell:
+
+| checkpoint | Pick-v1.5, n=30 | real-DROID loss |
+|---|---|---|
+| `pi05_base` | **4/30 (13.3%)** | 0.041 |
+| `pi05_droid_jointpos` (reference) | **7/30 (23.3%)** | 3.21 |
+
+Those two rates are not significantly different at n=30 (Wilson intervals overlap heavily). So the
+reference is not "broken on real DROID" in any way that matters, and base is not broken in sim.
+The two metrics simply measure different things, and **the oracle-loss assertion is not a valid
+validation for this reproduction** -- it has been dropped from the recipe.
+
+**The consequential finding is different: pi05_base is already fit to DROID.** Loss 0.0408 at step
+0 and 0.0327 at step 100 -- essentially converged before training starts, which is expected since
+DROID is part of pi0.5's pretraining mixture. Fine-tuning pi0.5-base on DROID is therefore close to
+a no-op, and is unlikely on its own to move base's sim performance to the reference's. Whatever
+distinguishes `pi05_droid_jointpos` came from something else (the joint-position action-space
+adaptation, sim cotraining, or both), not from more real-DROID data.
+
+Before committing ~10 days of GPU, the cheap decisive measurement is a full-coverage
+`pi05_base` vs reference comparison on one leaderboard cell, to establish whether there is a real
+gap to close at all.
+
+### The gap is real: pi05_base 6.0% vs reference 23.3% on Pick-v1.5 (n=1000)
+
+Full coverage, no `--max_episodes`, `--num_workers 4`, no determinism flags -- i.e. the archived
+reference cell's exact conditions, so the two numbers are directly comparable.
+
+| checkpoint | oracle | n | 95% CI |
+|---|---|---|---|
+| `pi05_base` (served through the unmodified harness) | **6.0%** | 1000 | [4.69, 7.65] |
+| `pi05_droid_jointpos` (reference, archived) | **23.3%** | 1000 | -- |
+
+**17.3pp, intervals nowhere near overlapping.** An earlier n=30 probe read 4/30 (13.3%) and was
+called "not significantly different" -- that was underpowered and wrong. At n=30 the Wilson
+interval spans roughly [5%, 30%]; it could not have distinguished these. Treat n=30 sim arms as
+smoke tests only, never as evidence of equivalence. (This is the same lesson as the n=1 handshake
+cells that once "PASSED" everything.)
+
+So there *is* a large, well-defined target for base->DROID fine-tuning, and the earlier reading
+that fine-tuning would be "close to a no-op" was wrong on the metric that matters.
+
+**What remains genuinely unknown is whether real-DROID fine-tuning closes it.** The two axes are
+anti-correlated on the evidence so far:
+
+| | real-DROID loss | Pick-v1.5 sim |
+|---|---|---|
+| `pi05_base` | **0.041** (best) | **6.0%** (worst) |
+| `pi05_droid_jointpos` | **3.21** (worse than random) | **23.3%** (best) |
+
+Base already models DROID action chunks well in the flow-matching sense and still fails the
+closed-loop task -- the standard open-loop-likelihood vs closed-loop-control gap, where small
+per-step errors compound over a 500-step rollout. Driving the loss lower is therefore not
+obviously the same as closing the 17.3pp gap.
+
+**Operational consequence: loss cannot gate this training run.** Any base->DROID fine-tune must be
+gated on periodic *sim* evaluation (a Pick-v1.5 cell at n>=300 every 20-50k steps), with an early
+stop if success is not climbing. Budget that eval time on top of the ~10 days of training.
+
+### Root cause of the 17.3pp gap: pi05_base almost never closes the gripper
+
+Decoding `actions/commanded_action` from the trajectory h5s of both 30-episode Pick-v1.5 runs
+(`grasping_type="binary"`, `grasping_threshold=0.5`, so the emitted gripper command is 0 or 255):
+
+| | reference | `pi05_base` |
+|---|---|---|
+| episodes | 30 | 30 |
+| steps | 992 | 1088 |
+| gripper-high steps | 144 (14.5%) | 31 (2.8%) |
+| **episodes ever commanding a grasp** | **24/30 (80%)** | **2/30 (6.7%)** |
+
+`pi05_base` commands a grasp in 2 of 30 episodes. Its measured success rate is 6.0% (60/1000).
+A policy that does not close the gripper cannot complete a pick, so this is not a correlate of the
+gap -- it is very close to the whole of it.
+
+**This is not an artefact of serving base with the reference's norm stats.** The gripper channel is
+normalised almost identically in both assets:
+
+| assets | gripper mean | std | q01 | q99 |
+|---|---|---|---|---|
+| `pi05_base` (own) | 0.4350 | 0.4413 | 0.0000 | 0.9982 |
+| `pi05_droid_jointpos` | 0.4514 | 0.4414 | 0.0000 | 0.9998 |
+
+On identical synthetic observations the two models also differ systematically in motion scale --
+reference step-to-step motion within a chunk is **1.79x** base's, and chunk drift **1.84x** -- so
+base is both timid and non-grasping. (Caveat: that probe pairs the benchmark's first frame with
+randomised joint states, an off-manifold combination; the h5 gripper statistics above are real
+in-episode data and are the load-bearing evidence.)
+
+**And this explains the loss/sim anti-correlation.** The training loss is averaged over a 32-dim
+action vector of which 24 dims are zero padding and 7 are joints; the gripper is a **single
+dimension, ~3% of the signal**. A model can therefore post an excellent aggregate loss (base:
+0.041) while being wrong on the one channel that decides task success. Aggregate action-prediction
+loss is structurally incapable of gating this benchmark.
+
+**Consequence for the recipe: the prognosis is good.** The gap is a learnable output-convention
+gap, not a sim-specific capability the DROID data lacks. The gripper is dim 7, left *absolute* by
+`make_bool_mask(7, -1)` while the joints are deltas, and its convention is learned directly from
+DROID. Fine-tuning `pi05_base` with `action_space=JOINT_POSITION` on DROID trains exactly this.
+Gate the run on sim success and, as a cheap leading indicator, on the fraction of episodes
+commanding a grasp -- that should climb toward the reference's 80% well before the success rate
+converges.
+
+## 2026-09-12 -- Harness regression check extended to all five wrappers, and the base->DROID fine-tune relaunched
+
+Two jobs this session: (a) answer "do our uncommitted changes still reproduce the leaderboard?"
+without re-running the 27-cell sweep, and (b) start the real base->DROID fine-tunes for pi0.5
+and pi0 with a gate that can stop them early.
+
+### The first pilot was not stale, and its step-2000 checkpoint had already moved the needle
+
+The `pilot_30k` run (`pi05_droid_jointpos_from_base`, started 2026-09-11 17:30) was alive at
+step 5.45k/200k at 5.7 s/it when this session began, with a 300-episode Pick-v1.5 eval of its
+step-2000 checkpoint in flight. That eval completed:
+
+| checkpoint | Pick-v1.5 oracle | n | 95% CI | grasp-episode rate |
+|---|---|---|---|---|
+| `pi05_base` | 6.0% | 1000 | [4.69, 7.65] | 6.7% (2/30) |
+| **`pilot_30k` step 2000** | **17.0%** | **300** | **[13.18, 21.67]** | **44.0% (132/300)** |
+| `pi05_droid_jointpos` (reference) | 23.3% | 1000 | -- | 80.0% (24/30) |
+| leaderboard | 18.05% | 997 | -- | -- |
+
+**At 1% of the training budget, roughly two thirds of the 17.3pp gap is closed and the interval
+already covers the leaderboard point estimate.** The grasp-episode rate -- the leading indicator
+predicted at `docs/eval_reproduction.md:3742` -- moved 6.7% -> 44.0% on the way to the
+reference's 80%. Both axes moving together is the predicted signature of a learnable
+output-convention gap, and it is the first direct evidence that base->DROID fine-tuning closes it.
+
+Caveat: that cell was run with `--max_episodes 300`, which selects whole *houses* and therefore
+under-covers categories. It is a trend indicator, **not** a leaderboard-comparable number.
+
+Consequence for the recipe: `specific_checkpoints_to_keep` on both `*_from_base` configs is now
+`[100, 500, 1_000, 2_000, 3_000, 5_000]`. A ladder whose first rung is `save_interval=10_000`
+would step straight over the region where most of the movement happens. Retention is free --
+`checkpoints.py:72` passes `max_to_keep=None`, so nothing is ever pruned and `keep_period` is
+inert for deletion.
+
+### Regression check: a payload hash beats a replay, and it covers the policies replay cannot
+
+`scripts/probe_policy_payload.py` (new) feeds each wrapper a synthetic observation and hashes
+`obs_to_model_input()` and `model_output_to_action()` -- the complete wire payload, images
+included, after `resize_with_pad` and state packing. No server, no GPU, no sampling noise.
+
+This exists because deterministic replay has two structural blind spots. **MolmoAct2 cannot be
+replay-tested at all** (`host_server_droid.py:202` calls `predict_action` without `generator=`,
+so sampling draws from the OS-seeded global torch RNG), and the **5-camera auto-detect branch**
+was listed at line 3551 as proven statically but never exercised end-to-end. The probe closes
+both, for all five wrappers, in about a minute.
+
+Three rigs: bench-v1 2-cam (`exo_camera_1`/`wrist_camera`), bench-v2 full rig, and the
+Pick-v2-RandCam `--camera_names` override. Result, HEAD vs working tree:
+
+| | cells | verdict |
+|---|---|---|
+| input payload (5 policies x 3 rigs) | 15 | 13 IDENTICAL, 2 HEAD-CRASH |
+| output action (5 policies) | 5 | 5 IDENTICAL |
+| **total** | **20** | **18 identical, 0 regressions** |
+
+The two non-identical cells are HEAD *crashing* where the working tree works:
+`dreamzero/randcam_override` and `tiptop/randcam_override` both raise
+`ValueError: "<X>PolicyConfig" object has no field "camera_names"`. That is the bug the
+`camera_names`-onto-`BasePolicyConfig` move fixes -- RandCam attaches `--camera_names` for
+*every* policy. Strict improvement, not drift.
+
+**All three fine-tune targets (pi05, pi0, molmoact2) are byte-identical on every rig, both
+directions.** `check_provenance.py` is clean over 33 cells and `compare_to_leaderboard.py` still
+reports 24/29 PASS with both computable Group B aggregates passing.
+
+> Three traps found while building this, each of which produces a *false pass*:
+> 1. **Hashing a summary instead of the value.** The first output-side probe hashed
+>    `summarize()`'d action dicts, which record shape and dtype but not value -- so all five
+>    policies returned the same hash. They must not: pi/molmoact2 threshold the gripper with `>`,
+>    DreamZero with `>=`, TiPToP is continuous. The probe now asserts it resolves at least 3
+>    distinct output hashes across the 5 policies, so a vacuous comparison fails loudly.
+> 2. **Forcing one tree's default onto the other.** HEAD defaults `camera_names` to the literal
+>    `['exo_camera_1','wrist_camera']` and the working tree to `None`; *both* mean "auto-detect"
+>    in their own tree. Setting either value explicitly on both arms measures the probe. Only
+>    the RandCam rig assigns; the others leave each tree at its own default.
+> 3. **Normalising away a real difference.** DreamZero's payload carries a fresh `uuid4()`
+>    `session_id` per `reset()` -- by design, and the reason it must run at `--num_workers 1`.
+>    It is normalised before hashing, but every normalised key is printed, so this cannot
+>    silently grow to cover a field that actually matters.
+>
+> Baseline isolation is asserted, not assumed (the line 3443 trap): the HEAD arm must report
+> `resolve_camera_keys` **absent** and the old literal `camera_names` default, or the verdict is
+> declared void.
+
+### Relaunch: 0.75 memory fraction costs nothing and buys a gate
+
+The pilot ran at `XLA_PYTHON_CLIENT_MEM_FRACTION=0.9`, which preallocates ~86 GB of each
+93.6 GiB card and leaves ~8.5 GB -- not enough for the ~9 GB inference server a ladder gate
+needs. Gating an in-flight run would have meant stopping it and paying ~24 min of
+time-to-first-batch on resume.
+
+Relaunched both models at **0.75** (`MEMFRAC` in `scripts/train_openpi_droid.sh`):
+
+| | preallocated | free/GPU | measured rate |
+|---|---|---|---|
+| pilot at 0.9 | 87.3 GB | 8.5 GB | 5.7 s/it |
+| **base2droid_20260912 at 0.75** | **73.1 GB** | **22.7 GB** | **4.2-4.4 s/it** |
+
+Not a regression -- *faster*, and matching the 4.3 s/it documented at line 3564. (The pilot's
+5.7 s/it was inflated by the concurrent eval rendering on its own GPU pair.) ~9.6 days for 200k
+steps, both models concurrently on their own NVLink pairs.
+
+### Staggering the two launches matters: a 6-minute checkpoint stall
+
+Launching pi0 while pi0.5 was writing its step-100 checkpoint stalled that write completely --
+zero bytes for >4 minutes, with 97 threads in D state on `do_user_addr_fault` and
+`rwsem_down_write_slowpath` (`ts_pool_worker`, orbax's tensorstore writers). It was not a disk
+problem and not an out-of-memory: 1.4 TB was reported available throughout.
+
+The cause is the collision of two allocation bursts. pi0.5 held **318 GB RSS** (higher than the
+">200 GB" estimated at line 3524) and orbax additionally needs ~43 GB of host memory to stage
+the checkpoint; pi0 was simultaneously filling its own unconditional `shuffle(250_000)` buffer
+toward 255 GB. Memory reclaim, not capacity, is the bottleneck.
+
+It resolved on its own once pi0's buffer finished filling -- 3.7 GB -> 18 GB -> 42.7 GB written,
+D-threads 97 -> 0. Since the shuffle buffer fills once per launch, this is a startup-window
+hazard, not a recurring one. **Stagger concurrent launches past each other's first checkpoint**
+(step 100 here, ~7 min in) rather than starting them minutes apart.
+
+### Provenance bug: gate cells would all have lied about their checkpoint
+
+`eval.py` recorded `PolicySpec.checkpoint_path` -- the *static* default for the released
+checkpoint -- rather than what the server actually loaded. The in-flight `_pilot_2000` cell
+claims `policy_checkpoint: third_party/openpi/checkpoints/pi05_droid_jointpos` while the server
+was serving `checkpoints/pilot_2000/`. Every ladder rung would have been misattributed the same
+way, which would have made the whole fine-tuning record unreadable after the fact.
+
+`eval.py` now takes `--checkpoint_path` and records `policy_checkpoint_overridden` alongside it,
+so a ladder/probe cell is distinguishable from a released-checkpoint cell without diffing paths
+by eye. Verified: with the flag the override propagates, without it the default is unchanged,
+and TiPToP (no client-side checkpoint) still omits the flag entirely.
+
+### New tooling
+
+- `scripts/probe_policy_payload.py` -- the payload/action hash A/B described above.
+- `scripts/grasp_rate.py` -- grasp-command rate from trajectory h5s. Validated against the
+  numbers recorded at line 3706: it reproduces the reference's 24/30 (80.0%) and 144/992 (14.5%)
+  and base's 2/30 (6.7%) exactly.
+- `scripts/gate_openpi_ckpt.sh` -- symlink a ladder rung, serve it, run a full-coverage cell,
+  report oracle rate *and* grasp rate. Writes under a leading-underscore date tag so rungs stay
+  inert to `compare_to_leaderboard.py`; without it a rung would supersede the archived
+  released-checkpoint cell, since `latest_results_csv()` takes the latest date dir.
+- `pi0_droid_jointpos_from_base_smoke` registered. `MODEL=pi0 SMOKE=1` previously built a config
+  name that did not exist, so the pi0 smoke path had never run.
+
+### Tier 3: fresh full-coverage cells reproduce pi05, and re-expose MolmoAct2's known Pick-v1.5 outlier
+
+Two full-coverage Pick-v1.5 cells re-run with the working tree (`--date verify_20260912`, 666
+houses each -- identical coverage to the archived cells, no `--max_episodes`):
+
+| policy | ours (fresh) | ours (archived 20260828_full) | leaderboard | verdict |
+|---|---|---|---|---|
+| `pi05_droid` | **25.2%** (1000) | 23.3% (1000) | 18.05% | PASS |
+| `molmoact2_droid` | **37.2%** (1000) | 37.84% (999) | 43.40% | **FAIL** |
+
+`pi05_droid` reproduces cleanly: the archived 23.3% sits inside the fresh cell's 95% CI
+[22.61, 27.98].
+
+**The molmoact2 FAIL is a boundary artifact on a pre-existing outlier, not a regression.** The
+arithmetic:
+
+| | rate | 95% CI |
+|---|---|---|
+| ours, fresh | 37.20% | [34.259, 40.239] |
+| ours, archived | 37.84% | [34.882, 40.886] |
+| leaderboard | 43.40% | [40.359, 46.491] |
+
+The fresh cell misses interval overlap by **0.120 pp**; the archived cell cleared it by
+0.527 pp. The two runs differ by **6 successes out of 1000**.
+
+Four reasons this is not our changes:
+
+1. **Pick-v1.5 has been MolmoAct2's known outlier since the original campaign.** The entry at
+   line 2135 records it as FAIL at 37.84% vs 43.40% (-5.6pp), explicitly "one clear outlier at
+   Pick-v1.5". It became a PASS only when the verdict rule changed from point containment to
+   CI overlap (`089e2ac`, `4494c9c`) -- and then only by half a point. The cell has been sitting
+   on the decision boundary all along; this run pushed it 0.6pp to the other side.
+2. **The payload is byte-identical.** `probe_policy_payload.py` shows molmoact2 IDENTICAL to
+   HEAD on all three camera rigs and on `model_output_to_action`.
+3. **Exact reproduction is structurally impossible for this policy.** `host_server_droid.py:202`
+   calls `predict_action` without `generator=`, so sampling draws from the OS-seeded global
+   torch RNG. Run-to-run drift is guaranteed; 6/1000 is small against it. For comparison,
+   pi05 -- which *is* seeded and varies only through XLA autotuning -- moved 19/1000 between its
+   own two runs of this same cell.
+4. **The load-bearing aggregate still passes.** MolmoBot Combined for molmoact2 is
+   **21.4% (6981) vs 21.47%** -- near-exact, and `BENCHMARK.md` makes the 7-task pooled
+   aggregate the primary check precisely because a single cell at n=1000 is weak.
+
+`BENCHMARK.md`'s pre-registered reading applies: *"A single FAIL is noise; three FAILs in the
+same direction for one policy is a wiring bug."* Eight of nine molmoact2 cells PASS and the
+aggregate is near-exact.
+
+**The finding worth keeping is about the check, not the code: the verdict on
+molmoact2/Pick-v1.5 is fragile.** It sits within ~0.5pp of the overlap boundary, so it will flip
+between runs of identical code. Treating a flip there as signal is a mistake in either
+direction -- the earlier PASS was no more meaningful than this FAIL. A cell this close to the
+threshold should be reported with its margin, not just its verdict.
+
+### The ladder: pi0.5-base reaches reference-checkpoint performance at step 5000 of 200,000
+
+Full-coverage Pick-v1.5 cells (n=1000, no `--max_episodes`) against each rung of
+`pi05_droid_jointpos_from_base/base2droid_20260912`, via `scripts/gate_openpi_ckpt.sh`:
+
+| step | oracle | 95% CI | grasp-episode rate | vs leaderboard 18.05% |
+|---|---|---|---|---|
+| 0 (`pi05_base`) | 6.0% (n=1000) | [4.69, 7.65] | 6.7% | far below |
+| 2000 (pilot, n=300) | 17.0% | [13.18, 21.67] | 44.0% | overlaps |
+| 3000 | **18.0%** (180/1000) | [15.74, 20.50] | 44.5% | **near-exact match** |
+| 5000 | **24.9%** (249/1000) | [22.32, 27.67] | 48.6% | **above** |
+| reference `pi05_droid_jointpos` | 23.3% / 25.2% | -- | 80.0% | above |
+
+**At step 3000 -- 1.5% of the 200k budget -- the fine-tune matches the PI0.5-DROID leaderboard
+entry almost exactly** (18.00% vs 18.05%; intervals [15.74, 20.50] and [15.79, 20.56]). **At step
+5000 it reaches 24.9%, statistically indistinguishable from our own two measurements of the
+released reference checkpoint (23.3% archived, 25.2% fresh).**
+
+So the answer to the question left open at line 3689 -- *"what remains genuinely unknown is
+whether real-DROID fine-tuning closes the gap"* -- is **yes, and far faster than the recipe
+assumed.** The 17.3pp gap closes inside 5k steps; the published recipe's sample budget (bs128 x
+200k = 1 epoch) is roughly 40x more than this cell needs.
+
+The curve is still rising at 5k (18.0 -> 24.9), so this is not yet a plateau and training
+continues.
+
+**The grasp-rate indicator worked, but not as a proportional predictor.** It moved 6.7% -> 44.0%
+by step 2000, i.e. it did most of its climbing *before* the success rate did, which is what it
+was chosen for -- it is a usable early stop signal. But it then went nearly flat
+(44.0 -> 44.5 -> 48.6) while success rose 17.0 -> 24.9, and it sits at roughly half the
+reference's 80% while *matching* the reference's success rate. Read it as a cheap
+directional gate, not as a quantity to drive toward the reference's value.
+
+**Caveat, and it is the main one: this is one task of nine.** `pi05_droid` has leaderboard rows
+for all 9 tasks plus MolmoBot Combined (10.25%), and `BENCHMARK.md` makes the 7-task pooled
+aggregate the load-bearing check precisely because a single cell at n=1000 is weak. Matching
+Pick-v1.5 is necessary, not sufficient.
+
+**Also worth separating: two different bars, ~6pp apart.** Our own measurement of the reference
+checkpoint on this cell (23.3-25.2%) runs consistently *above* the leaderboard entry (18.05%).
+"Matches the leaderboard" and "matches the released checkpoint as we measure it" are not the
+same claim; step 3000 cleared the first, step 5000 clears both.
+
+> Script bug found and fixed in `gate_openpi_ckpt.sh`: a nested `$(python3 -c "...")` inside a
+> double-quoted `echo` ends the outer quote at the inner one, splitting `renderer` and running
+> `er` as a command. Cosmetic only -- the conda env itself resolved through a separate, correct
+> substitution, so the step-5000 cell is valid -- but it is the kind of quoting error that would
+> silently misroute a filament task if it had landed one line earlier.
+
+### MolmoAct2 fine-tune data is staged
+
+`allenai/droid_lerobot` (named at `data_mixtures.py:303`) is **not publicly accessible**. The
+public dataset with a schema that matches the mixture field-for-field is
+`allenai/MolmoAct2-DROID-Dataset`: LeRobot v3.0, 74,604 episodes, 17,758,044 frames at 15 fps,
+`action` float32[8], `observation.state` float32[8], and exactly the three video keys
+`observation.images.{exterior_1_left,exterior_2_left,wrist_left}` that
+`build_molmoact2_droid()` lists. Downloaded (241 GB, 1414 files, 42 min) to
+`/data/neehar/lerobot_data/allenai/droid_lerobot`, which is where
+`lerobot_wrapper.py:2964` resolves `${LEROBOT_DATA_ROOT}/{username}/{repo_id}` -- so the existing
+mixture finds it with no code change.
+
+Note it carries 74,604 episodes against the RLDS tree's 95,658: a curated subset
+(`is_episode_successful` is a feature), not the full DROID release. That is the set MolmoAct2's
+own recipe trains on, but it means the two model families are not fine-tuned on identical data,
+and any cross-family comparison should say so.
+
+`third_party/molmoact2`'s `lerobot/`, `YAM/` and `EVA_DROID/` submodules were empty and are now
+initialised. (`YAM/molmoact2` fails to recurse -- no URL in `.gitmodules` -- which is internal to
+YAM and irrelevant to DROID training.)
+
+### Classic-subset sweep at step 5000: pi0-base fully reproduced, pi0.5 tracking
+
+Training was stopped at ~7.7k (pi0.5) / ~5.8k (pi0) and the budget redirected from depth to
+breadth, on the reasoning that the leaderboard bar had been cleared on the one task measured and
+a single cell is not the bar. Both runs kept `train_states/5000`, so `RESUME=1` restores them if
+a cell misses.
+
+Full-coverage classic-renderer cells against the step-5000 rungs:
+
+| policy | task | finetune@5k | our reference ckpt | leaderboard | verdict |
+|---|---|---|---|---|---|
+| `pi05_droid` | Pick-v1.5 | 24.9% (1000) | 25.2% (1000) | 18.05% | PASS |
+| `pi05_droid` | Pick-v2-classic | 6.6% (1000) | 8.0% (1000) | 6.38% | PASS |
+| `pi0_droid` | Open-v1 | 13.3% (1000) | 9.8% (1000) | 11.00% | PASS |
+| `pi0_droid` | Close-v1 | 66.6% (915) | 54.6% (915) | 53.11% | PASS |
+
+**`pi0_droid`'s leaderboard coverage is exactly Open-v1 and Close-v1** (Group A only -- it has no
+Group B rows), so those two cells are its *complete* bar. **PI0-Base fine-tuned from
+`gs://openpi-assets/checkpoints/pi0_base` for 5,000 steps reproduces the PI0-DROID leaderboard
+entry in full.**
+
+**Flag, not a celebration: Close-v1 overshoots by 12pp.** 66.56% CI [63.44, 69.54] against the
+leaderboard's 53.11% CI [49.88, 56.33] and our own reference-checkpoint measurement of 54.54%
+CI [51.30, 57.74] -- non-overlapping with both. The verdict rule is `overlap-or-better`, which is
+one-sided and, as `compare_to_leaderboard.py`'s own docstring says, "cannot detect a bug that
+inflates score". 66.6% is not implausible for this task (pi05 scores 67.2%, dreamzero 62.0%,
+molmoact2 73.3% on the same cell), and the fine-tune is beating a *weaker* reference -- pi0-DROID
+is the lowest-scoring openpi entry on the board. But an overshoot this size against the released
+checkpoint is a result to verify, not to bank.
+
+> **Gate-script bug, caught because it cost a cell.** Two gate runs back to back race each
+> other's server. The readiness poll connects to the *previous* cell's dying listener on its
+> first attempt, prints "up" with zero dots, and then `eval.py` -- starting seconds later, after
+> the old server has exited and while the new one is still loading (~50s) -- gets ECONNREFUSED
+> and fails the cell. Lost `pi05_droid/Open-v1`. `gate_openpi_ckpt.sh` now waits for the port to
+> be *free* before starting its server, and re-probes immediately before handing off to eval.py.
+> The tell was the missing dots: a genuine wait prints one per 10s poll.
+
+### MolmoAct2 training env: two version traps, both load-bearing
+
+`mlspaces-molmoact2-train` (new, separate from the serving env for the transformers 4.57 vs 5.x
+conflict). Built: Python 3.12.14, torch 2.8.0+cu129, transformers 5.17.0, lerobot 0.5.0.
+
+1. **Python must be 3.12 exactly.** `experiments/lerobot/pyproject.toml` requires `>=3.12`
+   (a 3.11 env fails with `Package 'lerobot' requires a different Python`), while
+   `third_party/molmoact2/pyproject.toml` caps at `<3.13`.
+2. **torchcodec must be 0.6.0, and needs FFmpeg 6 from conda-forge.** lerobot pulls torchcodec
+   0.10.0, which is built against a much newer torch and dies on 2.8 with
+   `undefined symbol: _ZN3c1013MessageLogger6streamB5cxx11Ev`. The wheel also does not vendor
+   FFmpeg's shared objects, so `libavutil.so.58` must come from conda. Without both fixes the
+   reference recipe's `--frame_loading_backend=torchcodec_exact` cannot load at all -- and the
+   failure is a silent fallback, not an error.
+
+Data path validated end to end: `LeRobotDataset('allenai/droid_lerobot', root=...)` reports
+74,604 episodes / 17,758,044 frames / 15 fps (matching `info.json`) and decodes a real sample on
+**both** backends -- three camera streams at `(3, 180, 320)` float32, `observation.state` (8,),
+and a real instruction string. The mixture resolves
+`lerobot:franka_droid -> ['lerobot:allenai/droid_lerobot']` with `action_key='action'`,
+`state_keys=['observation.state']`, the three expected camera keys, `action_horizon=15`,
+`control_mode='absolute joint pose'` -- matching the dataset field for field.
+
+### Follow-up on the Close-v1 overshoot: the released pi0-DROID is the outlier, not our run
+
+The entry above flagged our pi0 fine-tune's 66.6% on Close-v1 as a 12pp overshoot against the
+released checkpoint's 54.5%, and declined to bank it. pi0.5's Close-v1 cell resolves it:
+
+| Close-v1 | rate (n=915) | 95% CI |
+|---|---|---|
+| pi05 finetune@5k | 66.99% | [63.88, 69.96] |
+| pi05 reference ckpt | 67.21% | [64.10, 70.18] |
+| pi0 finetune@5k | 66.56% | [63.44, 69.54] |
+| **pi0 reference ckpt** | **54.54%** | **[51.30, 57.74]** |
+
+**Our two fine-tunes are statistically indistinguishable from each other and from the pi0.5
+reference; only the released pi0-DROID sits outside that cluster.** Three of the four intervals
+overlap almost completely and the fourth overlaps none of them.
+
+The natural reading is that this recipe -- identical data, identical norm stats, identical
+hyperparameters, differing only in base weights and action horizon -- drives both bases to the
+same Close-v1 ceiling, and that ceiling is above where the published pi0-DROID entry sits. That
+is a statement about the reference, not about our measurement: pi0-DROID is already the
+lowest-scoring openpi entry on the board, and nothing about our pipeline is pi0-specific.
+
+It is *evidence*, not proof. Untested alternatives: the published pi0-DROID may have used a
+different action-space or step budget than `pi0_droid_jointpos_from_base` encodes, in which case
+we are not reproducing it so much as outperforming a differently-trained model. Worth a note in
+any reported number; not worth blocking on.
+
+The methodological point from line 2150 applies in the other direction here -- this is two cells,
+and two cells is where several premature patterns in this document were born. Recorded as a
+consistent observation, with the pattern claim deferred.
+
+### Completed classic subset: pi0 reproduces in full, pi0.5 misses Open-v1 and only Open-v1
+
+| policy | task | finetune@5k | our reference ckpt | leaderboard | verdict |
+|---|---|---|---|---|---|
+| `pi0_droid` | Open-v1 | 13.3% | 9.8% | 11.00% | PASS |
+| `pi0_droid` | Close-v1 | 66.6% | 54.6% | 53.11% | PASS |
+| `pi05_droid` | Pick-v1.5 | 24.9% | 25.2% | 18.05% | PASS |
+| `pi05_droid` | Pick-v2-classic | 6.6% | 8.0% | 6.38% | PASS |
+| `pi05_droid` | Close-v1 | 67.0% | 67.2% | 65.14% | PASS |
+| **`pi05_droid`** | **Open-v1** | **14.7%** | **20.7%** | **22.70%** | **FAIL** |
+
+**This is a real miss, not a boundary artifact like molmoact2/Pick-v1.5.** 14.70%
+CI [12.64, 17.03] against the leaderboard's [20.21, 25.40] and our own reference-checkpoint
+measurement's [18.30, 23.32] -- clear of both, by 3.18pp and 1.27pp of interval gap respectively.
+
+**And it vindicates taking breadth over depth.** On Pick-v1.5 alone the fine-tune looked like an
+unqualified success (24.9% vs a 25.2% reference). Four cells show the success is task-dependent.
+
+**The shape of the miss is the informative part.** pi0.5's fine-tune reproduces its reference
+almost exactly on three cells (24.9 vs 25.2, 6.6 vs 8.0, 67.0 vs 67.2) and misses on one, by 6pp.
+It is not a uniform shortfall from undertraining, and it is not "articulated tasks" as a class --
+Close-v1 is Group A/bench-v1 too and it matches.
+
+**The two fine-tunes again land together, and again that is the tell.** On Open-v1 pi0.5 scores
+14.7% and pi0 13.3% -- close. Their *references* are 20.7% and 9.8% -- far apart. Same structure
+as Close-v1 (both fine-tunes ~66.8%), but with the opposite consequence: there the common level
+cleared both bars, here it clears only pi0's lower one. So the recipe drives both bases to a
+task-specific common level, and on Open-v1 that level sits below what pi0.5-DROID achieves.
+
+Two candidate explanations, distinguishable by experiment:
+
+1. **Undertrained.** 5,000 of 200,000 steps, and Pick-v1.5 was still climbing at 5k
+   (18.0 -> 24.9 between 3k and 5k). Open-v1 may simply need more. Both runs kept
+   `train_states/5000`, so `RESUME=1` tests this directly.
+2. **Sim cotraining.** Recorded at line 3594: the leaderboard's pi0.5 rows come from
+   `/weka/prior/abhayd/sim_cotraining_output/...`. If pi0.5-DROID was cotrained on MolmoSpaces
+   sim, it would hold an advantage precisely on the tasks real DROID data does not teach --
+   and opening articulated furniture in ProcTHOR scenes is the least DROID-like of these four,
+   while the two Pick cells (where we match) are the most DROID-like. That the *pi0* reference
+   does NOT show this advantage (9.8%, below our fine-tune) is consistent: it is the pi0.5 entry
+   that the cotraining path is recorded against.
+
+Note the grasp-rate indicator is uninformative here: pi0's Open-v1 grasp rate is 63.5% against
+pi0.5's 38.8%, yet their success rates are within 1.4pp of each other. It tracked the
+gripper-convention gap on Pick; it does not track this one. Consistent with the earlier reading
+that it is a directional early-stop gate, not a quantity to optimise.
+
+### `--resume` was broken in this fork, and it cost ~19 hours of idle GPU
+
+Resuming pi0.5 from `train_states/5000` crashed ~8 minutes after launch with
+
+```
+NotImplementedError: CallbackHandler does not support restore
+  third_party/openpi/src/openpi/training/checkpoints.py:182
+```
+
+and was not noticed until the next day, because the check watching for it reported only on
+success and was terminated before it could observe the failure. Four GPUs sat idle overnight.
+No data was lost -- every checkpoint, result and train state survived -- but the lesson is
+recorded because it is the second instance this session of trusting a read whose source was
+stale or absent. **A watcher for a long-running job must emit on death and crash, not only on
+the happy path, and "no news" is not evidence the job is alive.**
+
+**Root cause.** `DualCheckpointManager.restore` rebinds its own `items` parameter inside the
+loop:
+
+```python
+for mng in self.mngs:
+    items = {k: v for k, v in items.items() if self.mng_assignments[k] == mng}   # rebinds!
+    restored_single = mng.restore(step, items)
+```
+
+There are two managers: `mngr1` owns `params` + `assets` (in the run directory), `mngr2` owns
+`train_state` (in `train_states/`). After the first iteration filters `items` down to that
+manager's keys, the second iteration filters the already-filtered dict and gets `{}` -- and orbax,
+handed an empty request, restores **every** item present in that manager's directory. `mngr1`'s
+directory contains `assets`, whose `CallbackHandler` is save-only by construction ("Only for
+saving, not for restoring"), so it raises.
+
+The logs show exactly this ordering:
+
+```
+16:50:48  Restoring checkpoint from .../train_states/5000     <- mngr2, fine
+16:52:20  Restoring checkpoint from .../5000                  <- mngr1, empty request, crash
+```
+
+`self.mngs` is a **set**, so which manager receives the empty dict depends on iteration order --
+which is why this would look intermittent rather than deterministic. `save()` directly above
+already does the filtering correctly into a separate `items_single`; `restore()` simply did not
+match it.
+
+Fixed by mirroring `save()` and skipping managers with no requested items. Verified: both
+restores now complete and training resumed at **step 5.00k**, not 0.
+
+> Read the resumed rate from a settled interval. The first sample after restore was `56.1s/it`
+> (XLA compilation); it fell to 6.2 s/it within a minute and settles at ~4.2. This is the same
+> trap as the post-checkpoint reading recorded at line 3566.
+
+An auto-gate is now armed to run the Open-v1 cell at rungs 10k/20k/30k as they land, from a
+**frozen copy** of `gate_openpi_ckpt.sh` -- editing a script while bash is executing it makes
+bash resume at a stale byte offset, which earlier in this session silently re-ran two already
+completed cells.

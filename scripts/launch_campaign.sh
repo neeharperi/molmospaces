@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch the full campaign: 7 policy servers + 7 eval lanes across 4 GPUs, in one tmux session.
+# Launch the full campaign: 6 policy servers + 5 eval lanes across 4 GPUs, in one tmux session.
 #
 #   DATE_TAG=20260828_full bash scripts/launch_campaign.sh servers   # start the servers only
 #   DATE_TAG=20260828_full bash scripts/launch_campaign.sh lanes group-a
@@ -10,7 +10,7 @@
 # any lane starts (scripts/eval.py TCP-probes and hard-fails otherwise), and servers outlive
 # the group-a -> group-b transition.
 #
-# GPU ASSIGNMENT. Weights total ~158 GB against 4 x ~92 GB usable, so all seven co-reside with
+# GPU ASSIGNMENT. Weights total ~120 GB against 4 x ~92 GB usable, so all six co-reside with
 # room to spare. Placement is by footprint and by which pairs never spike together:
 #
 #   GPU0  dreamzero  45 GB                            + 1 render lane
@@ -110,12 +110,13 @@ start_servers() {
     _srv openpi_pi05 "env GPU=3 PORT=8080 CONFIG=pi05_droid_jointpos bash scripts/serve_openpi.sh"
     _srv openpi_pi0  "env GPU=3 PORT=8081 CONFIG=pi0_droid_jointpos  bash scripts/serve_openpi.sh"
     echo
-    echo "Servers starting. Wait for all 7 ports before launching lanes:"
+    echo "Servers starting. Wait for all 6 ports before launching lanes:"
     echo "  bash scripts/launch_campaign.sh wait-servers"
 }
 
 wait_servers() {
-    local ports="8080 8081 8000 18765 5000 8003 8004 8123"
+    # Must match the _srv list in start_servers above, one port each.
+    local ports="8080 8081 8000 18765 5000 8123"
     echo "waiting for: $ports"
     while :; do
         local down=""

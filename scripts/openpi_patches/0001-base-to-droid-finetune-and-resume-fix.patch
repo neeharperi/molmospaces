@@ -1,0 +1,426 @@
+Base->DROID fine-tuning support: training configs, a --resume fix, and loss logging.
+
+Base commit: 711487f019e5f03b254d427d4523b1f0805a4814 (omarrayyann/openpi)
+
+Why: reproducing the PI0-DROID / PI0.5-DROID leaderboard entries from the *base* checkpoints
+needs three things this fork does not have. Each is load-bearing; see
+docs/eval_reproduction.md for how each was found and measured.
+
+1. src/openpi/training/config.py -- four TrainConfigs:
+   pi05_droid_jointpos_from_base, pi0_droid_jointpos_from_base and their _smoke variants.
+   They read the local DROID RLDS tree, train in JOINT_POSITION action space, and take norm
+   stats from the reference DROID checkpoint's assets rather than base's. That last point is
+   not cosmetic: the base checkpoints ship joint-VELOCITY stats whose action std is 1.63x
+   larger, which would mis-scale every training target.
+
+2. src/openpi/training/checkpoints.py -- DualCheckpointManager.restore rebound its own `items`
+   parameter inside the loop, so after the first manager filtered it the second received {} --
+   and orbax, handed an empty request, restores EVERY item in that manager's directory. One of
+   those items is `assets`, whose CallbackHandler is save-only by construction, so --resume
+   always died with "NotImplementedError: CallbackHandler does not support restore". `self.mngs`
+   is a set, so which manager got the empty dict depended on iteration order. save() directly
+   above already filters correctly into items_single; restore() just did not match it.
+
+3. scripts/train.py -- the per-step loss was written with pbar.write, but init_logging()
+   installs tqdm_loggable's handler, which reroutes the bar through logging and leaves
+   pbar.write going to a stream nothing captures. The loss was absent from the run log
+   entirely. Changed to logging.info.
+
+NOTE: the configs contain absolute paths for this host (the DROID RLDS tree, the idle-filter
+JSON, and the reference assets dirs). Repoint them before using this patch elsewhere.
+
+Applied by scripts/apply_third_party_patches.sh openpi.
+
+diff --git a/scripts/train.py b/scripts/train.py
+index 3441d89..a1486eb 100644
+--- a/scripts/train.py
++++ b/scripts/train.py
+@@ -263,7 +263,11 @@ def main(config: _config.TrainConfig):
+             stacked_infos = common_utils.stack_forest(infos)
+             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
+             info_str = ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())
+-            pbar.write(f"Step {step}: {info_str}")
++            # logging.info, not pbar.write: init_logging() installs tqdm_loggable's
++            # TqdmLoggingHandler, which reroutes the bar through logging and leaves
++            # pbar.write going to a stream nothing captures -- so the loss was absent
++            # from the run log entirely. The progress bar itself still works.
++            logging.info(f"Step {step}: {info_str}")
+             wandb.log(reduced_info, step=step)
+             infos = []
+         batch = next(data_iter)
+diff --git a/src/openpi/training/checkpoints.py b/src/openpi/training/checkpoints.py
+index d420cc3..8dbba9a 100644
+--- a/src/openpi/training/checkpoints.py
++++ b/src/openpi/training/checkpoints.py
+@@ -34,8 +34,19 @@ class DualCheckpointManager:
+     def restore(self, step: int, items: dict):
+         restored = {}
+         for mng in self.mngs:
+-            items = {k: v for k, v in items.items() if self.mng_assignments[k] == mng}
+-            restored_single = mng.restore(step, items)
++            # `items_single`, NOT `items`. The original rebound the parameter inside the loop, so
++            # after the first manager filtered it the second saw an already-filtered dict and got
++            # {} -- and orbax, handed an empty request, restores EVERY item present in that
++            # manager's directory. mngr1's directory contains `assets`, whose CallbackHandler is
++            # save-only, so that path raised
++            #     NotImplementedError: CallbackHandler does not support restore
++            # and --resume could never work. `self.mngs` is a set, so which manager got the empty
++            # dict depended on iteration order, which is why this looked intermittent.
++            # save() above already does this correctly; restore() just did not match it.
++            items_single = {k: v for k, v in items.items() if self.mng_assignments[k] == mng}
++            if not items_single:
++                continue
++            restored_single = mng.restore(step, items_single)
+             restored.update(restored_single)
+         return restored
+ 
+diff --git a/src/openpi/training/config.py b/src/openpi/training/config.py
+index 970cbe4..81440d9 100644
+--- a/src/openpi/training/config.py
++++ b/src/openpi/training/config.py
+@@ -531,9 +531,11 @@ class TrainConfig:
+     data: DataConfigFactory = dataclasses.field(default_factory=FakeDataConfig)
+ 
+     # Base directory for config assets (e.g., norm stats).
+-    assets_base_dir: str = "/gscratch/scrubbed/arhanj/openpi/assets"
++    # Was /gscratch/scrubbed/arhanj/... upstream in this fork -- the fork author's cluster,
++    # which does not exist on this host. Both now live on /data, the only volume with room.
++    assets_base_dir: str = "/data/neehar/openpi_runs/assets"
+     # Base directory for checkpoints.
+-    checkpoint_base_dir: str = "/gpfs/scrubbed/arhanj/openpi/checkpoints"
++    checkpoint_base_dir: str = "/data/neehar/openpi_runs/checkpoints"
+ 
+     # Random seed that will be used by random generators during training.
+     seed: int = 42
+@@ -1497,6 +1499,331 @@ _CONFIGS = [
+         keep_period=20_000,
+         num_workers=0,  # Important: RLDS DataLoader requires num_workers=0, handles multi-processing internally
+     ),
++    TrainConfig(
++        # DIAGNOSTIC ONLY -- not for training, and NOT a validation gate.
++        #
++        # These were built to run an "oracle" check: a run initialised from the already-DROID
++        # checkpoint should show a lower step-0 loss than one from base. That check is INVALID
++        # for this reproduction. Measured on identical real-DROID data with identical norm
++        # stats: pi05_base 0.041, official pi05_droid 1.54, random init 2.05,
++        # pi05_droid_jointpos (the served reference) 3.21 -- i.e. the reference scores worse
++        # than random on real-DROID likelihood while scoring 23.3% on the sim benchmark.
++        # Serving pi05_base through the harness gives 4/30 on Pick-v1.5 vs the reference's
++        # 7/30, which is not a significant difference. Real-DROID loss and sim success measure
++        # different things; only the sim benchmark is a valid acceptance test here.
++        name="diag_randinit",
++        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
++        data=RLDSDroidDataConfig(
++            repo_id="droid",
++            assets=AssetsConfig(assets_dir="/data/neehar/Workspace/molmospaces/third_party/openpi/checkpoints/pi05_droid_jointpos/assets", asset_id="droid"),
++            rlds_data_dir="/data/neehar/Workspace/molmospaces",
++            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
++            filter_dict_path="/data/neehar/Workspace/claude/polaris/data/filters/droid_sample_ranges_v1_0_1.json",
++        ),
++        # no weight_loader -> NoOpWeightLoader -> random init (loss-scale calibration)
++        num_train_steps=20,
++        batch_size=32,
++        fsdp_devices=2,
++        log_interval=1,
++        save_interval=1000,
++        specific_checkpoints_to_keep=[],
++        num_workers=0,
++        wandb_enabled=False,
++    ),
++    TrainConfig(
++        # DIAGNOSTIC ONLY -- not for training, and NOT a validation gate.
++        #
++        # These were built to run an "oracle" check: a run initialised from the already-DROID
++        # checkpoint should show a lower step-0 loss than one from base. That check is INVALID
++        # for this reproduction. Measured on identical real-DROID data with identical norm
++        # stats: pi05_base 0.041, official pi05_droid 1.54, random init 2.05,
++        # pi05_droid_jointpos (the served reference) 3.21 -- i.e. the reference scores worse
++        # than random on real-DROID likelihood while scoring 23.3% on the sim benchmark.
++        # Serving pi05_base through the harness gives 4/30 on Pick-v1.5 vs the reference's
++        # 7/30, which is not a significant difference. Real-DROID loss and sim success measure
++        # different things; only the sim benchmark is a valid acceptance test here.
++        name="diag_pi05_official_vel",
++        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
++        data=RLDSDroidDataConfig(
++            repo_id="droid",
++            assets=AssetsConfig(assets_dir="gs://openpi-assets/checkpoints/pi05_droid/assets", asset_id="droid"),
++            rlds_data_dir="/data/neehar/Workspace/molmospaces",
++            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_VELOCITY,
++            filter_dict_path="/data/neehar/Workspace/claude/polaris/data/filters/droid_sample_ranges_v1_0_1.json",
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_droid/params"),
++        num_train_steps=20,
++        batch_size=32,
++        fsdp_devices=2,
++        log_interval=1,
++        save_interval=1000,
++        specific_checkpoints_to_keep=[],
++        num_workers=0,
++        wandb_enabled=False,
++    ),
++    TrainConfig(
++        # BASE -> DROID(joint-position) full fine-tune, for reproducing the
++        # PI0.5-DROID leaderboard entry starting from the *base* checkpoint.
++        #
++        # `datasets` is deliberately left unset. data_loader.py:170 routes to
++        # MultiRldsDataset only when it is not None; that path requires "name:version"
++        # strings (multi_rlds_dataset.py:54) and a droid_near_domain_dataset we do not
++        # have. Leaving it None gives the clean upstream DroidRldsDataset instead.
++        #
++        # `assets` points at the reference DROID-finetuned checkpoint's norm stats --
++        # the ones the published entry was trained and is served with. The *base*
++        # checkpoints ship joint-VELOCITY stats (action std ~1.7x larger), which would
++        # mis-scale every target.
++        name="pi05_droid_jointpos_from_base",
++        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
++        data=RLDSDroidDataConfig(
++            repo_id="droid",
++            assets=AssetsConfig(
++                assets_dir="/data/neehar/Workspace/molmospaces/third_party/openpi/checkpoints/pi05_droid_jointpos/assets",
++                asset_id="droid",
++            ),
++            # parent directory of `droid/1.0.1`
++            rlds_data_dir="/data/neehar/Workspace/molmospaces",
++            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
++            # byte-identical to gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json
++            filter_dict_path="/data/neehar/Workspace/claude/polaris/data/filters/droid_sample_ranges_v1_0_1.json",
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
++        # peak_lr == decay_lr, so this is linear warmup then a CONSTANT 5e-5. That is what
++        # makes the bs128/200k rescale of the published bs256/100k recipe benign: same
++        # sample budget (25.6M ~= 1 epoch of the idle-filtered 25.77M frames), same LR.
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=2_000,
++            peak_lr=5e-5,
++            decay_steps=1_000_000,
++            decay_lr=5e-5,
++        ),
++        num_train_steps=200_000,
++        batch_size=128,
++        # This host is 2 NVLink-bonded pairs (0-1, 2-3) with cross-NUMA SYS between them
++        # (`nvidia-smi topo -m`). fsdp_devices=2 confined to one pair keeps every parameter
++        # all-gather on the 318 GB/s bridge; a 4-way mesh would cross NUMA every step.
++        fsdp_devices=2,
++        log_interval=100,
++        save_interval=10_000,
++        keep_period=10_000,
++        # Dense early rungs, sparse late ones. The step-2000 checkpoint of the first pilot
++        # already scored 17.0% (51/300) on Pick-v1.5 against base's 6.0% and the leaderboard's
++        # 18.05% -- i.e. most of the gap closes inside the first 1% of the budget, so the
++        # informative region is 0-10k and a 10k-only ladder would step right over it.
++        # Retention is free here: checkpoints.py:72 passes max_to_keep=None, so nothing is
++        # ever pruned and keep_period is inert for deletion.
++        specific_checkpoints_to_keep=[100, 500, 1_000, 2_000, 3_000, 5_000],
++        num_workers=0,  # RLDS DataLoader requires num_workers=0
++    ),
++    TrainConfig(
++        # BASE -> DROID(joint-position) full fine-tune, for reproducing the
++        # PI0-DROID leaderboard entry starting from the *base* checkpoint.
++        #
++        # `datasets` is deliberately left unset. data_loader.py:170 routes to
++        # MultiRldsDataset only when it is not None; that path requires "name:version"
++        # strings (multi_rlds_dataset.py:54) and a droid_near_domain_dataset we do not
++        # have. Leaving it None gives the clean upstream DroidRldsDataset instead.
++        #
++        # `assets` points at the reference DROID-finetuned checkpoint's norm stats --
++        # the ones the published entry was trained and is served with. The *base*
++        # checkpoints ship joint-VELOCITY stats (action std ~1.7x larger), which would
++        # mis-scale every target.
++        name="pi0_droid_jointpos_from_base",
++        model=pi0_config.Pi0Config(action_horizon=10),
++        data=RLDSDroidDataConfig(
++            repo_id="droid",
++            assets=AssetsConfig(
++                assets_dir="/data/neehar/Workspace/molmospaces/third_party/openpi/checkpoints/pi0_droid_jointpos/assets",
++                asset_id="droid",
++            ),
++            # parent directory of `droid/1.0.1`
++            rlds_data_dir="/data/neehar/Workspace/molmospaces",
++            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
++            # byte-identical to gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json
++            filter_dict_path="/data/neehar/Workspace/claude/polaris/data/filters/droid_sample_ranges_v1_0_1.json",
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
++        # peak_lr == decay_lr, so this is linear warmup then a CONSTANT 5e-5. That is what
++        # makes the bs128/200k rescale of the published bs256/100k recipe benign: same
++        # sample budget (25.6M ~= 1 epoch of the idle-filtered 25.77M frames), same LR.
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=2_000,
++            peak_lr=5e-5,
++            decay_steps=1_000_000,
++            decay_lr=5e-5,
++        ),
++        num_train_steps=200_000,
++        batch_size=128,
++        # This host is 2 NVLink-bonded pairs (0-1, 2-3) with cross-NUMA SYS between them
++        # (`nvidia-smi topo -m`). fsdp_devices=2 confined to one pair keeps every parameter
++        # all-gather on the 318 GB/s bridge; a 4-way mesh would cross NUMA every step.
++        fsdp_devices=2,
++        log_interval=100,
++        save_interval=10_000,
++        keep_period=10_000,
++        # Dense early rungs, sparse late ones. The step-2000 checkpoint of the first pilot
++        # already scored 17.0% (51/300) on Pick-v1.5 against base's 6.0% and the leaderboard's
++        # 18.05% -- i.e. most of the gap closes inside the first 1% of the budget, so the
++        # informative region is 0-10k and a 10k-only ladder would step right over it.
++        # Retention is free here: checkpoints.py:72 passes max_to_keep=None, so nothing is
++        # ever pruned and keep_period is inert for deletion.
++        specific_checkpoints_to_keep=[100, 500, 1_000, 2_000, 3_000, 5_000],
++        num_workers=0,  # RLDS DataLoader requires num_workers=0
++    ),
++    TrainConfig(
++        # BASE -> DROID(joint-position) full fine-tune, for reproducing the
++        # PI0.5-DROID leaderboard entry starting from the *base* checkpoint.
++        #
++        # `datasets` is deliberately left unset. data_loader.py:170 routes to
++        # MultiRldsDataset only when it is not None; that path requires "name:version"
++        # strings (multi_rlds_dataset.py:54) and a droid_near_domain_dataset we do not
++        # have. Leaving it None gives the clean upstream DroidRldsDataset instead.
++        #
++        # `assets` points at the reference DROID-finetuned checkpoint's norm stats --
++        # the ones the published entry was trained and is served with. The *base*
++        # checkpoints ship joint-VELOCITY stats (action std ~1.7x larger), which would
++        # mis-scale every target.
++        name="pi05_droid_jointpos_from_base_smoke",
++        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
++        data=RLDSDroidDataConfig(
++            repo_id="droid",
++            assets=AssetsConfig(
++                assets_dir="/data/neehar/Workspace/molmospaces/third_party/openpi/checkpoints/pi05_droid_jointpos/assets",
++                asset_id="droid",
++            ),
++            # parent directory of `droid/1.0.1`
++            rlds_data_dir="/data/neehar/Workspace/molmospaces",
++            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
++            # byte-identical to gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json
++            filter_dict_path="/data/neehar/Workspace/claude/polaris/data/filters/droid_sample_ranges_v1_0_1.json",
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi05_base/params"),
++        # peak_lr == decay_lr, so this is linear warmup then a CONSTANT 5e-5. That is what
++        # makes the bs128/200k rescale of the published bs256/100k recipe benign: same
++        # sample budget (25.6M ~= 1 epoch of the idle-filtered 25.77M frames), same LR.
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=2_000,
++            peak_lr=5e-5,
++            decay_steps=1_000_000,
++            decay_lr=5e-5,
++        ),
++        num_train_steps=1_000,
++        batch_size=128,
++        # This host is 2 NVLink-bonded pairs (0-1, 2-3) with cross-NUMA SYS between them
++        # (`nvidia-smi topo -m`). fsdp_devices=2 confined to one pair keeps every parameter
++        # all-gather on the 318 GB/s bridge; a 4-way mesh would cross NUMA every step.
++        fsdp_devices=2,
++        log_interval=100,
++        save_interval=500,
++        keep_period=500,
++        specific_checkpoints_to_keep=[100, 500, 2_000],
++        num_workers=0,  # RLDS DataLoader requires num_workers=0
++        wandb_enabled=False,
++    ),
++    TrainConfig(
++        # BASE -> DROID(joint-position) full fine-tune, for reproducing the
++        # PI0-DROID leaderboard entry starting from the *base* checkpoint.
++        #
++        # `datasets` is deliberately left unset. data_loader.py:170 routes to
++        # MultiRldsDataset only when it is not None; that path requires "name:version"
++        # strings (multi_rlds_dataset.py:54) and a droid_near_domain_dataset we do not
++        # have. Leaving it None gives the clean upstream DroidRldsDataset instead.
++        #
++        # `assets` points at the reference DROID-finetuned checkpoint's norm stats --
++        # the ones the published entry was trained and is served with. The *base*
++        # checkpoints ship joint-VELOCITY stats (action std ~1.7x larger), which would
++        # mis-scale every target.
++        name="pi0_droid_jointpos_from_base_smoke",
++        model=pi0_config.Pi0Config(action_horizon=10),
++        data=RLDSDroidDataConfig(
++            repo_id="droid",
++            assets=AssetsConfig(
++                assets_dir="/data/neehar/Workspace/molmospaces/third_party/openpi/checkpoints/pi0_droid_jointpos/assets",
++                asset_id="droid",
++            ),
++            # parent directory of `droid/1.0.1`
++            rlds_data_dir="/data/neehar/Workspace/molmospaces",
++            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
++            # byte-identical to gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json
++            filter_dict_path="/data/neehar/Workspace/claude/polaris/data/filters/droid_sample_ranges_v1_0_1.json",
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("gs://openpi-assets/checkpoints/pi0_base/params"),
++        # peak_lr == decay_lr, so this is linear warmup then a CONSTANT 5e-5. That is what
++        # makes the bs128/200k rescale of the published bs256/100k recipe benign: same
++        # sample budget (25.6M ~= 1 epoch of the idle-filtered 25.77M frames), same LR.
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=2_000,
++            peak_lr=5e-5,
++            decay_steps=1_000_000,
++            decay_lr=5e-5,
++        ),
++        num_train_steps=1_000,
++        batch_size=128,
++        # This host is 2 NVLink-bonded pairs (0-1, 2-3) with cross-NUMA SYS between them
++        # (`nvidia-smi topo -m`). fsdp_devices=2 confined to one pair keeps every parameter
++        # all-gather on the 318 GB/s bridge; a 4-way mesh would cross NUMA every step.
++        fsdp_devices=2,
++        log_interval=100,
++        save_interval=500,
++        keep_period=500,
++        specific_checkpoints_to_keep=[100, 500, 2_000],
++        num_workers=0,  # RLDS DataLoader requires num_workers=0
++        wandb_enabled=False,
++    ),
++    TrainConfig(
++        # BASE -> DROID(joint-position) full fine-tune, for reproducing the
++        # PI0.5-DROID leaderboard entry starting from the *base* checkpoint.
++        #
++        # `datasets` is deliberately left unset. data_loader.py:170 routes to
++        # MultiRldsDataset only when it is not None; that path requires "name:version"
++        # strings (multi_rlds_dataset.py:54) and a droid_near_domain_dataset we do not
++        # have. Leaving it None gives the clean upstream DroidRldsDataset instead.
++        #
++        # `assets` points at the reference DROID-finetuned checkpoint's norm stats --
++        # the ones the published entry was trained and is served with. The *base*
++        # checkpoints ship joint-VELOCITY stats (action std ~1.7x larger), which would
++        # mis-scale every target.
++        # NOTE: retained for reference only. The "oracle" premise it encodes -- that the
++        # reference DROID checkpoint should show a lower loss on real DROID than base -- was
++        # tested and is false (see the diag_* configs above). Do not use it as a gate.
++        name="pi05_droid_jointpos_oracle_smoke",
++        model=pi0_config.Pi0Config(action_horizon=15, pi05=True),
++        data=RLDSDroidDataConfig(
++            repo_id="droid",
++            assets=AssetsConfig(
++                assets_dir="/data/neehar/Workspace/molmospaces/third_party/openpi/checkpoints/pi05_droid_jointpos/assets",
++                asset_id="droid",
++            ),
++            # parent directory of `droid/1.0.1`
++            rlds_data_dir="/data/neehar/Workspace/molmospaces",
++            action_space=droid_rlds_dataset.DroidActionSpace.JOINT_POSITION,
++            # byte-identical to gs://openpi-assets/droid/droid_sample_ranges_v1_0_1.json
++            filter_dict_path="/data/neehar/Workspace/claude/polaris/data/filters/droid_sample_ranges_v1_0_1.json",
++        ),
++        weight_loader=weight_loaders.CheckpointWeightLoader("/data/neehar/Workspace/molmospaces/third_party/openpi/checkpoints/pi05_droid_jointpos/params"),
++        # peak_lr == decay_lr, so this is linear warmup then a CONSTANT 5e-5. That is what
++        # makes the bs128/200k rescale of the published bs256/100k recipe benign: same
++        # sample budget (25.6M ~= 1 epoch of the idle-filtered 25.77M frames), same LR.
++        lr_schedule=_optimizer.CosineDecaySchedule(
++            warmup_steps=2_000,
++            peak_lr=5e-5,
++            decay_steps=1_000_000,
++            decay_lr=5e-5,
++        ),
++        num_train_steps=1_000,
++        batch_size=128,
++        # This host is 2 NVLink-bonded pairs (0-1, 2-3) with cross-NUMA SYS between them
++        # (`nvidia-smi topo -m`). fsdp_devices=2 confined to one pair keeps every parameter
++        # all-gather on the 318 GB/s bridge; a 4-way mesh would cross NUMA every step.
++        fsdp_devices=2,
++        log_interval=100,
++        save_interval=500,
++        keep_period=500,
++        specific_checkpoints_to_keep=[100, 500, 2_000],
++        num_workers=0,  # RLDS DataLoader requires num_workers=0
++        wandb_enabled=False,
++    ),
+     TrainConfig(
+         # This config is for fine-tuning pi05-DROID on a custom (smaller) DROID dataset.
+         # Here, we use LeRobot data format (like for all other fine-tuning examples)

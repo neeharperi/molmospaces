@@ -22,8 +22,6 @@ listening socket with no attributable PID is, by elimination, someone else's.
 from __future__ import annotations
 
 import argparse
-import os
-import socket
 import subprocess
 import sys
 from pathlib import Path

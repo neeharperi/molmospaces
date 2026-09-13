@@ -34,6 +34,7 @@ that need a human decision and an entry in docs/env_parity.md.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import os
 import re
@@ -161,7 +162,8 @@ def parse_allowlist(doc: Path) -> tuple[set[str], dict[tuple[str, str], str]]:
     return whole_env, per_pkg
 
 
-def _pip_list(interpreter: Path, *extra: str) -> list[dict]:
+@functools.lru_cache(maxsize=None)
+def _pip_list(interpreter: Path) -> tuple[dict, ...]:
     out = subprocess.run(
         [
             str(interpreter),
@@ -170,14 +172,13 @@ def _pip_list(interpreter: Path, *extra: str) -> list[dict]:
             "list",
             "--format=json",
             "--disable-pip-version-check",
-            *extra,
         ],
         capture_output=True,
         text=True,
     )
     if out.returncode != 0:
         raise SystemExit(f"pip list failed in {interpreter}:\n{out.stderr.strip()}")
-    return json.loads(out.stdout)
+    return tuple(json.loads(out.stdout))  # hashable, so lru_cache can hold it
 
 
 def _norm(name: str) -> str:
@@ -205,7 +206,9 @@ def editable(interpreter: Path) -> set[str]:
     """
     if not interpreter.exists():
         return set()
-    return {_norm(d["name"]) for d in _pip_list(interpreter, "--editable")}
+    return {
+        _norm(d["name"]) for d in _pip_list(interpreter) if d.get("editable_project_location")
+    }
 
 
 def interpreter_for(name: str, spec: EnvSpec) -> Path:

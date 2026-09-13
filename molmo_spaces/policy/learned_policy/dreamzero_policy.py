@@ -6,8 +6,7 @@ import uuid
 
 import cv2
 import numpy as np
-import websockets.exceptions
-import websockets.sync.client
+
 # The standalone PyPI `msgpack_numpy` package encodes ndarrays with a different wire format
 # than `openpi_client.msgpack_numpy` (a distinct implementation openpi ships and this server
 # vendors as its own encode/decode convention -- confirmed against
@@ -19,104 +18,31 @@ from openpi_client import msgpack_numpy
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.policy.base_policy import InferencePolicy
-from molmo_spaces.policy.learned_policy.utils import shard_port, resize_with_pad
+from molmo_spaces.policy.learned_policy.endpoint_ws_client import EndpointWebsocketClient
+from molmo_spaces.policy.learned_policy.utils import (
+    DREAMZERO_EXTERIOR_CAMERA_KEYS,
+    resize_with_pad,
+    resolve_camera_keys,
+    shard_port,
+)
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-PING_INTERVAL_SECS = 60
-PING_TIMEOUT_SECS = 600
 
-# Bound every recv(). websockets.sync's recv() blocks forever, and the reconnect path below
-# only covers a server that has CLOSED the connection -- a server that stays up and never
-# answers is a different failure. That is what wedged three workers of tiptop/PnP-NextTo-v2
-# for 29 hours on 2026-09-04 (see tiptop_policy.py); this client had the identical shape.
-# It matters more here: the DreamZero lane runs at --num_workers 1 because the AR state in
-# socket_test_optimized_AR.py is a single instance attribute, so there is no second worker to
-# carry the cell and a wedge stalls the lane outright -- with 7 Group-B cells still pending.
-#
-# Measured DreamZero inference is 8.8-9.3s, so 600s is ~65x headroom and still turns a
-# permanent wedge into a failed episode the pipeline can move past.
-RECV_TIMEOUT_SECS = 600
+class DreamZeroWebsocketClient(EndpointWebsocketClient):
+    """Websocket client for the DreamZero server.
 
+    Uses openpi's vendored msgpack_numpy rather than the standalone PyPI package -- confirmed
+    against third_party/dreamzero/eval_utils/policy_server.py's own
+    `from openpi_client import msgpack_numpy`. See EndpointWebsocketClient for why that
+    distinction is load-bearing.
+    """
 
-class DreamZeroWebsocketClient:
-    """Websocket client that adds endpoint field for DreamZero server."""
+    msgpack = msgpack_numpy
 
     def __init__(self, host: str = "0.0.0.0", port: int = 8000) -> None:
-        self._uri = f"ws://{host}:{port}"
-        self._packer = msgpack_numpy.Packer()
-        self._ws, self._server_metadata = self._wait_for_server()
-        # store the URI that actually worked so reconnects reuse it
-        self._connected_uri = self._uri
-
-    def _connect_once(self, uri: str) -> tuple[websockets.sync.client.ClientConnection, dict]:
-        conn = websockets.sync.client.connect(
-            uri,
-            compression=None,
-            max_size=None,
-            ping_interval=PING_INTERVAL_SECS,
-            ping_timeout=PING_TIMEOUT_SECS,
-        )
-        metadata = msgpack_numpy.unpackb(conn.recv(timeout=RECV_TIMEOUT_SECS))
-        return conn, metadata
-
-    def _wait_for_server(self) -> tuple[websockets.sync.client.ClientConnection, dict]:
-        logging.info(f"Waiting for server at {self._uri}...")
-        try:
-            conn, metadata = self._connect_once(self._uri)
-            return conn, metadata
-        except Exception:
-            logging.info("Connection with ws:// failed. Trying wss:// ...")
-
-        wss_uri = "wss://" + self._uri.split("//")[1]
-        conn, metadata = self._connect_once(wss_uri)
-        self._uri = wss_uri
-        return conn, metadata
-
-    def _reconnect(self) -> None:
-        retry_delay = 2
-        while True:
-            logging.warning(
-                f"WebSocket connection closed. Reconnecting to {self._connected_uri}..."
-            )
-            try:
-                self._ws, self._server_metadata = self._connect_once(self._connected_uri)
-                logging.info("Reconnected to server.")
-                return
-            except Exception as e:
-                logging.warning(f"Reconnect failed: {e}. Retrying in {retry_delay}s...")
-                time.sleep(retry_delay)
-
-    def infer(self, obs: dict) -> dict:
-        obs["endpoint"] = "infer"
-        data = self._packer.pack(obs)
-        try:
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
-            logging.warning(f"{type(e).__name__} during infer. Reconnecting and retrying...")
-            self._reconnect()
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        if isinstance(response, str):
-            raise RuntimeError(f"Error in inference server:\n{response}")
-        return msgpack_numpy.unpackb(response)
-
-    def reset(self, reset_info: dict = None) -> None:
-        if reset_info is None:
-            reset_info = {}
-        reset_info["endpoint"] = "reset"
-        data = self._packer.pack(reset_info)
-        try:
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
-            logging.warning(f"{type(e).__name__} during reset. Reconnecting and retrying...")
-            self._reconnect()
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        return response
+        super().__init__(host, port)
 
 
 class DreamZero_Policy(InferencePolicy):
@@ -130,14 +56,17 @@ class DreamZero_Policy(InferencePolicy):
         self.grasping_type = exp_config.policy_config.grasping_type
         self.chunk_size = exp_config.policy_config.chunk_size
         self.grasping_threshold = exp_config.policy_config.grasping_threshold
+        self.camera_names = exp_config.policy_config.camera_names
         self.model = None
         self.session_id = None
+        self._warned_single_exterior = False
 
     def reset(self):
         self.actions_buffer = None
         self.current_buffer_index = 0
         self.starting_time = None
         self.session_id = str(uuid.uuid4())
+        self._warned_single_exterior = False
         # Rolling per-camera frame history the AR block-conditioning stack is drawn from
         # (oldest first). Cleared per episode -- see obs_to_model_input for why this exists.
         self.frame_history = {
@@ -191,7 +120,6 @@ class DreamZero_Policy(InferencePolicy):
         # project and was never actually run against the real observation pipeline before.
         if isinstance(obs, list | tuple):
             obs = obs[0]
-        # self.render(obs)
         prompt = self.task.get_task_description()
         grip = np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)
         if grip < 0.1:
@@ -205,23 +133,28 @@ class DreamZero_Policy(InferencePolicy):
         # expected and unavoidable, not a bug. Still log it, since it's a real deviation from
         # DreamZero's training distribution and must be visible in reported numbers, not
         # silently absorbed (BENCHMARK.md's Risks section).
-        if "randomized_zed2_analogue_1" in obs:
-            exo_camera_key_0, exo_camera_key_1_fallback = (
-                "randomized_zed2_analogue_1",
-                "randomized_zed2_analogue_2",
-            )
-        else:
-            exo_camera_key_0, exo_camera_key_1_fallback = "exo_camera_1", "exo_camera_2"
-        exo_camera_key_1 = exo_camera_key_1_fallback if exo_camera_key_1_fallback in obs else exo_camera_key_0
-        if exo_camera_key_1 == exo_camera_key_0:
+        exo_camera_key_0, wrist_camera_key = resolve_camera_keys(
+            obs, self.camera_names, DREAMZERO_EXTERIOR_CAMERA_KEYS
+        )
+        exo_camera_key_1_fallback = (
+            "randomized_zed2_analogue_2"
+            if exo_camera_key_0 == "randomized_zed2_analogue_1"
+            else "exo_camera_2"
+        )
+        exo_camera_key_1 = (
+            exo_camera_key_1_fallback if exo_camera_key_1_fallback in obs else exo_camera_key_0
+        )
+        # Warn once per episode, not once per step: this fires on every step of every
+        # FrankaDroidCameraSystem cell, and at ~250 bytes a line that was 455k lines / 115 MB
+        # of the 118 MB Open-v1 eval_stdout.log -- 96% of the file, which also inflated every
+        # downstream tool that scans these logs (campaign_status.py, lane_health.py).
+        if exo_camera_key_1 == exo_camera_key_0 and not self._warned_single_exterior:
+            self._warned_single_exterior = True
             log.warning(
                 f"Only one exterior camera ({exo_camera_key_0}) found in obs; duplicating it "
                 f"into both DreamZero exterior slots. This is a known deviation -- see "
                 f"docs/eval_reproduction.md."
             )
-        wrist_camera_key = (
-            "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
-        )
 
         # DreamZero's server is autoregressive over 24-step (chunk_size) video blocks: every
         # call after the first must condition on a 4-frame history stack spanning the block
@@ -232,7 +165,15 @@ class DreamZero_Policy(InferencePolicy):
         # actually executed. The history is appended every step regardless of whether this
         # step will trigger a new server call, so the deque always reflects the true rollout.
         exterior_0_frame = resize_with_pad(obs[exo_camera_key_0], 180, 320)
-        exterior_1_frame = resize_with_pad(obs[exo_camera_key_1], 180, 320)
+        # When there is only one exterior view the two keys are the same array; alias the
+        # result instead of running an identical PIL resize a second time (that was ~1M
+        # redundant resizes across the three completed single-exterior cells). The frames are
+        # read-only conditioning inputs, so sharing one buffer across both deques is safe.
+        exterior_1_frame = (
+            exterior_0_frame
+            if exo_camera_key_1 == exo_camera_key_0
+            else resize_with_pad(obs[exo_camera_key_1], 180, 320)
+        )
         wrist_frame = resize_with_pad(obs[wrist_camera_key], 180, 320)
         self.frame_history["exterior_0"].append(exterior_0_frame)
         self.frame_history["exterior_1"].append(exterior_1_frame)

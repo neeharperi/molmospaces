@@ -1,7 +1,8 @@
+import os
+
 from molmo_spaces.configs.policy_configs import BasePolicyConfig
 from molmo_spaces.policy.base_policy import PolicyFactory
 from molmo_spaces.utils.function_utils import make_lenient
-import os
 
 
 class PiPolicyConfig(BasePolicyConfig):
@@ -12,10 +13,6 @@ class PiPolicyConfig(BasePolicyConfig):
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     chunk_size: int = 8
-    # [exo_camera_key, wrist_camera_key]. eval_main.py's --camera_names override writes here;
-    # PI_Policy.obs_to_model_input reads it when it differs from this default.
-    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
-
     policy_cls: type = None
     policy_factory: PolicyFactory | None = None
     policy_type: str = "learned"
@@ -67,8 +64,6 @@ class MolmoAct2PolicyConfig(BasePolicyConfig):
     # (MolmoBotDroidPolicyConfig) likewise carries this as its own separate `action_horizon`
     # field rather than reusing a sampler knob.
     action_horizon: int = 15
-    camera_names: list[str] = ["exo_camera_1", "wrist_camera"]
-
     policy_cls: type = None
     policy_factory: PolicyFactory | None = None
     policy_type: str = "learned"

@@ -26,6 +26,24 @@ CKPT_DIR="${CKPT_DIR:-checkpoints/$CONFIG}"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.20}"
 
+# DETERMINISTIC=1 makes repeated runs bit-reproducible, for A/B regression tests.
+#
+# openpi seeds its sampler with jax.random.key(0) (policies/policy.py:65), so a fresh
+# server at --num_workers 1 *should* replay exactly. It does not by default: measured on
+# this host, an identical observation sent to three freshly-restarted servers returned
+# actions that agreed bitwise on runs 2 and 3 but differed from run 1 in the 4th decimal.
+# The cause is XLA autotuning picking a different (equally valid) kernel at first compile.
+# Tiny action differences then compound through a 500-step closed-loop rollout: two runs
+# of IDENTICAL code flipped 6 of 30 episodes on pi05_droid/Pick-v1.5.
+#
+# With these flags the same probe returned identical bytes 3/3. Left OFF by default
+# because it changes which kernels run, and every archived result in runs/ was produced
+# without it -- turning it on globally would silently make new numbers non-comparable to
+# the campaign. Turn it on for both arms of a comparison, never for just one.
+if [ "${DETERMINISTIC:-0}" = "1" ]; then
+  export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_autotune_level=0 --xla_gpu_deterministic_ops=true"
+fi
+
 [ -d "third_party/openpi/$CKPT_DIR" ] || {
   echo "checkpoint not found: third_party/openpi/$CKPT_DIR" >&2
   echo "fetch it with: gsutil -m cp -r gs://openpi-assets/checkpoints/$CONFIG third_party/openpi/checkpoints/" >&2

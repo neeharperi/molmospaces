@@ -26,7 +26,6 @@ is strictly authoritative for episode initialization.
 """
 
 from __future__ import annotations
-import os
 
 import datetime
 from pathlib import Path
@@ -204,20 +203,16 @@ class PiPolicyEvalConfig(JsonBenchmarkEvalConfig):
         self.robot_config.action_noise_config.enabled = False
 
 
-class Pi0PolicyEvalConfig(JsonBenchmarkEvalConfig):
+class Pi0PolicyEvalConfig(PiPolicyEvalConfig):
     """pi0-DROID. Same control rate and episode-termination semantics as pi0.5: both are
     openpi DROID checkpoints in the same joint-position action space, served by the same
     script from the same venv, so there is no reason for the harness side to differ.
+
+    Inherits from PiPolicyEvalConfig for exactly that reason -- only the policy config
+    (checkpoint and port) differs.
     """
 
-    robot_config: FrankaRobotConfig = FrankaRobotConfig()
     policy_config: Pi0PolicyConfig = Pi0PolicyConfig()
-    policy_dt_ms: float = 66.0  # ~15hz
-    end_on_success: bool = True
-
-    def model_post_init(self, __context):
-        super().model_post_init(__context)
-        self.robot_config.action_noise_config.enabled = False
 
 
 class MolmoAct2PolicyEvalConfig(JsonBenchmarkEvalConfig):
@@ -240,8 +235,6 @@ class MolmoAct2PolicyEvalConfig(JsonBenchmarkEvalConfig):
     def model_post_init(self, __context):
         super().model_post_init(__context)
         self.robot_config.action_noise_config.enabled = False
-
-
 
 
 class TiptopEvalConfig(JsonBenchmarkEvalConfig):

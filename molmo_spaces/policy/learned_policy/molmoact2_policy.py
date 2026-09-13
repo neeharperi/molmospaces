@@ -6,6 +6,7 @@ import numpy as np
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.policy.base_policy import InferencePolicy
+from molmo_spaces.policy.learned_policy.utils import resolve_camera_keys
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -49,7 +50,6 @@ class MolmoAct2HTTPClient:
 
     def infer(self, payload: dict) -> dict:
         body = self._json_numpy.dumps(payload)
-        last_exc: Exception | None = None
         for attempt in range(self._TRANSPORT_RETRIES):
             try:
                 resp = self._session.post(
@@ -58,7 +58,7 @@ class MolmoAct2HTTPClient:
                     data=body,
                     timeout=self.timeout,
                 )
-            except self._transport_errors as e:
+            except self._transport_errors:
                 # Observed in this campaign as bursts of ConnectionReset/RemoteDisconnected
                 # when MolmoAct2's server is contended by the other lanes sharing its GPU.
                 # Without a retry each burst costs whole episodes: PnP-v2 lost 7 of 541.
@@ -66,7 +66,6 @@ class MolmoAct2HTTPClient:
                 # Those losses are not neutral. A longer episode issues more requests and is
                 # therefore likelier to be hit, and long episodes are disproportionately
                 # failures -- so silently dropping them biases the success rate UPWARD.
-                last_exc = e
                 if attempt + 1 < self._TRANSPORT_RETRIES:
                     time.sleep(self._RETRY_BACKOFF_SECS * (attempt + 1))
                     continue
@@ -76,7 +75,6 @@ class MolmoAct2HTTPClient:
                     f"MolmoAct2 server error {resp.status_code}: {resp.text[:500]}"
                 )
             return resp.json()
-        raise last_exc  # unreachable; the loop either returns or raises
 
 
 class MolmoAct2Policy(InferencePolicy):
@@ -124,17 +122,7 @@ class MolmoAct2Policy(InferencePolicy):
 
         # exactly two cameras needed (external_cam, wrist_cam) -- confirmed via
         # third_party/molmoact2/sim_eval/inference/common.py's MOLMOACT2_SCHEMAS["droid"].
-        if self.camera_names != ["exo_camera_1", "wrist_camera"]:
-            exo_camera_key, wrist_camera_key = self.camera_names[0], self.camera_names[1]
-        else:
-            exo_camera_key = (
-                "droid_shoulder_light_randomization"
-                if "droid_shoulder_light_randomization" in obs
-                else "exo_camera_1"
-            )
-            wrist_camera_key = (
-                "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
-            )
+        exo_camera_key, wrist_camera_key = resolve_camera_keys(obs, self.camera_names)
 
         grip = np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)
         state = np.concatenate(

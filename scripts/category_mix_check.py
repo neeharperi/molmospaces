@@ -33,7 +33,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eval_common import wilson_interval
+from eval_common import latest_results_csv, wilson_interval
 
 MIN_LARGE_CATEGORY = 50  # only call out unsampled categories big enough to move the overall
 
@@ -86,11 +86,11 @@ def main() -> None:
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     args = parser.parse_args()
 
-    cells = sorted((args.runs_dir / args.policy / args.task).glob("*/results.csv"))
-    if not cells:
+    latest = latest_results_csv(args.runs_dir, args.policy, args.task)
+    if latest is None:
         print(f"No results.csv under {args.runs_dir / args.policy / args.task}")
         sys.exit(1)
-    ours = load_per_category(cells[-1])
+    ours = load_per_category(latest)
     leaderboard = load_per_category(args.leaderboard_csv)
 
     our_successes = sum(s for s, _ in ours.values())
@@ -112,7 +112,7 @@ def main() -> None:
     def verdict(x: float) -> str:
         return "INSIDE our 95% CI" if lo <= x <= hi else "OUTSIDE our 95% CI"
 
-    print(f"{args.policy} / {args.task}   (results: {cells[-1]})")
+    print(f"{args.policy} / {args.task}   (results: {latest})")
     print(
         f"  ours                                      {100.0 * our_successes / our_total:6.2f}%  "
         f"({our_successes}/{our_total})   Wilson95 [{lo:.2f}%, {hi:.2f}%]"

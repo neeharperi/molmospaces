@@ -174,10 +174,9 @@ POLICIES: dict[str, PolicySpec] = {
 }
 
 # The three policies BENCHMARK.md's acceptance criteria are load-bearing for (27 required
-# cells = 3 * 9, plus the 3 Group B aggregates). DreamZero and Cosmos (added after
-# BENCHMARK.md was written) are evaluated and reported, but a miss is informational only.
+# cells = 3 * 9, plus the 3 Group B aggregates). DreamZero (added after BENCHMARK.md was
+# written) is evaluated and reported, but a miss is informational only.
 REPRODUCTION_POLICIES = ("pi05_droid", "molmoact2_droid", "tiptop")
-INFORMATIONAL_POLICIES = ("dreamzero", "pi0_droid")
 
 # The leaderboard's pooled-aggregate row name for the Group B (MolmoBot Combined) comparison.
 GROUP_B_LEADERBOARD_TASK_NAME = "MolmoBot Combined"
@@ -209,3 +208,44 @@ def wilson_interval(successes: int, n: int, z: float = 1.959963985) -> tuple[flo
     center = p + z**2 / (2 * n)
     margin = z * ((p * (1 - p) / n + z**2 / (4 * n**2)) ** 0.5)
     return ((center - margin) / denom, (center + margin) / denom)
+
+
+# A leading underscore on a runs/ directory -- at either the policy or the date level -- marks
+# it as not-a-campaign-result: handshakes, A/B arms, debug runs, quarantined cells. The rule
+# has to be applied at BOTH levels and by EVERY consumer. `_` is 0x5F, which sorts after the
+# digits, so a 60-episode A/B arm in `_ab_C_dt100/` beat the real `20260828_full/` cell to
+# `sorted(...)[-1]` and was published as cosmos_edge's Pick-v1.5 verdict -- 26.7% (n=60) in
+# place of 33.8% (n=1000). Diagnostic runs must be inert to the comparison, not merely
+# distinguishable by a human reading directory names.
+# Substrings that mark a whole POLICY directory as quarantined, checked separately from the
+# leading-underscore rule above (which applies to any single path component).
+QUARANTINE_MARKERS = ("_INVALID", "_STALE", "_superseded")
+
+
+def is_campaign_dir(path) -> bool:
+    """True if ``path`` is a real campaign result directory rather than a diagnostic one."""
+    return not path.name.startswith("_")
+
+
+def latest_results_csv(runs_dir, policy: str, task: str):
+    """Newest real results.csv for a cell, ignoring underscore-prefixed date directories."""
+    cell_dir = runs_dir / policy / task
+    if not cell_dir.exists():
+        return None
+    candidates = sorted(c for c in cell_dir.glob("*/results.csv") if is_campaign_dir(c.parent))
+    return candidates[-1] if candidates else None
+
+
+def read_overall(results_csv):
+    """The OVERALL row of an eval_to_csv.py results.csv, as a pandas Series.
+
+    Read by column name, never by position -- eval_to_csv.py's column list is a de-facto
+    public API here and positional access silently reports a different metric when it grows.
+    """
+    import pandas as pd
+
+    df = pd.read_csv(results_csv, comment="#")
+    overall = df[df["category"] == "OVERALL"]
+    if overall.empty:
+        raise ValueError(f"{results_csv} has no OVERALL row")
+    return overall.iloc[0]

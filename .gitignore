@@ -69,3 +69,8 @@ tiptop_server_outputs/
 # `scripts/setup_envs.sh mlspaces-m2t2`, which pins the SHA recorded in docs/env_parity.md.
 # Its git-lfs weights land under weights/ and are large.
 third_party/m2t2/
+
+# The DROID RLDS dataset (3.4 TB: droid/1.0.0 + droid/1.0.1), staged here for openpi's
+# RLDS loader, which wants the parent directory of `droid/1.0.1`. Untracked and unignored
+# it shows up as a 3.4 TB pending add.
+droid/

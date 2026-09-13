@@ -9,7 +9,7 @@ import numpy as np
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.policy.base_policy import InferencePolicy, StatefulPolicy
-from molmo_spaces.policy.learned_policy.utils import resize_with_pad
+from molmo_spaces.policy.learned_policy.utils import resize_with_pad, resolve_camera_keys
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -126,20 +126,7 @@ class PI_Policy(InferencePolicy, StatefulPolicy):
             obs = obs[0]
 
         grip = np.clip(obs["qpos"]["gripper"][0] / 0.824033, 0, 1)
-        if self.camera_names != ["exo_camera_1", "wrist_camera"]:
-            # Explicit override (e.g. --camera_names for Pick-v2-RandCam): trust it rather
-            # than auto-detecting, since MuJoCo renders every camera in the benchmark's full
-            # camera set regardless of which one the policy is meant to read.
-            exo_camera_key, wrist_camera_key = self.camera_names[0], self.camera_names[1]
-        else:
-            exo_camera_key = (
-                "droid_shoulder_light_randomization"
-                if "droid_shoulder_light_randomization" in obs
-                else "exo_camera_1"
-            )
-            wrist_camera_key = (
-                "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
-            )
+        exo_camera_key, wrist_camera_key = resolve_camera_keys(obs, self.camera_names)
         model_input = {
             "observation/exterior_image_1_left": resize_with_pad(obs[exo_camera_key], 224, 224),
             "observation/wrist_image_left": resize_with_pad(obs[wrist_camera_key], 224, 224),

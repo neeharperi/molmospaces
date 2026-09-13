@@ -41,6 +41,16 @@ class BasePolicyConfig(Config):
     If true, require all cameras to record depth.
     In eval the cameras will be overridden, otherwise it will just require the camera system config to enable depth.
     """
+    camera_names: list[str] | None = None
+    """
+    ``[exterior_camera_key, wrist_camera_key]`` to read from each observation, or None to
+    auto-detect (see ``policy.learned_policy.utils.resolve_camera_keys``).
+
+    Lives on the base config because ``eval_main.py``'s ``--camera_names`` override assigns it
+    unconditionally, and pydantic raises on assignment to a field a model doesn't declare. It
+    was previously declared per-policy, so the Pick-v2-RandCam task -- which attaches
+    ``--camera_names`` for *every* policy -- crashed for the policies that lacked it.
+    """
 
 
 class ObjectManipulationPlannerPolicyConfig(BasePolicyConfig):

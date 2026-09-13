@@ -8,150 +8,41 @@ observation (wrist-camera RGB-D, camera intrinsics/extrinsics, current joint pos
 the task description) to the server and executes the returned plan.
 """
 
+import json
 import logging
 import time
-from typing import Any
 
 import cv2
 import msgpack_numpy
 import numpy as np
-import websockets.exceptions
-import websockets.sync.client
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.policy.base_policy import InferencePolicy
-from molmo_spaces.policy.learned_policy.utils import shard_port
+from molmo_spaces.policy.learned_policy.endpoint_ws_client import EndpointWebsocketClient
+from molmo_spaces.policy.learned_policy.utils import resolve_camera_keys, shard_port
 
 log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
-PING_INTERVAL_SECS = 60
-PING_TIMEOUT_SECS = 600
 
-# Bound the reconnect loop. The upstream wrapper retried forever, which turned a dead server
-# into a silent hang rather than a failed cell: during the Open-v1 run on 2026-08-18 the TiPToP
-# server exited (most likely OOM-killed -- its RSS had grown ~16GB -> ~23GB over the run) and
-# the client spent about 8 hours logging "Retrying in 2s..." while producing no episodes and no
-# provenance. Failing the cell after a bounded wait means the matrix runner moves on and the
-# loss is one task, not a night. The budget below is deliberately generous -- a TiPToP server
-# restart with cuRobo/cuTAMP warmup legitimately takes minutes -- but finite.
-RECONNECT_MAX_ATTEMPTS = 15
-RECONNECT_INITIAL_DELAY_SECS = 2
-RECONNECT_MAX_DELAY_SECS = 30
+class TiptopWebsocketClient(EndpointWebsocketClient):
+    """Websocket client for a TiPToP server.
 
-# Bound every recv() as well. RECONNECT_MAX_ATTEMPTS only covers a server that has *closed*
-# the connection; a server that stays up but never answers is a different failure, and
-# websockets.sync's recv() blocks forever on it. That is what happened to the
-# tiptop/PnP-NextTo-v2 cell on 2026-09-04: workers 0, 1 and 2 wedged mid-episode between
-# 19:17 and 19:41 with no traceback and zero CPU thereafter, leaving worker 3 to run the cell
-# alone for the next 29 hours at a quarter of the requested throughput (1.06 houses/hr
-# against 23-30 for this policy's completed cells), while the wedged workers held their
-# sockets open (68 ESTABLISHED connections against 11,866 opened).
-#
-# Generous but finite: the slowest legitimate planning call observed in the server log is
-# 74s, so 10 minutes is ~8x headroom and still turns a permanent wedge into a failed episode
-# that the pipeline can move past.
-RECV_TIMEOUT_SECS = 600
+    Uses the standalone PyPI msgpack_numpy, which is what the TiPToP server speaks.
+    """
 
-
-class TiptopWebsocketClient:
-    """Websocket client that adds endpoint field for a TiPToP server."""
+    msgpack = msgpack_numpy
 
     def __init__(self, host: str = "localhost", port: int = 8765) -> None:
-        self._uri = f"ws://{host}:{port}"
-        self._packer = msgpack_numpy.Packer()
-        self._ws, self._server_metadata = self._wait_for_server()
-        self._connected_uri = self._uri
+        super().__init__(host, port)
 
-    def _connect_once(self, uri: str) -> tuple[websockets.sync.client.ClientConnection, dict]:
-        conn = websockets.sync.client.connect(
-            uri,
-            compression=None,
-            max_size=None,
-            ping_interval=PING_INTERVAL_SECS,
-            ping_timeout=PING_TIMEOUT_SECS,
-        )
-        metadata = msgpack_numpy.unpackb(conn.recv(timeout=RECV_TIMEOUT_SECS))
-        return conn, metadata
-
-    def _wait_for_server(self) -> tuple[websockets.sync.client.ClientConnection, dict]:
-        logging.info(f"Waiting for server at {self._uri}...")
+    def _decode_str_response(self, response: str):
+        # Unlike the other endpoint servers, TiPToP answers some requests with a JSON string
+        # body rather than a msgpack frame; only a non-JSON string is an error report.
         try:
-            conn, metadata = self._connect_once(self._uri)
-            return conn, metadata
-        except Exception:
-            logging.info("Connection with ws:// failed. Trying wss:// ...")
-
-        wss_uri = "wss://" + self._uri.split("//")[1]
-        conn, metadata = self._connect_once(wss_uri)
-        self._uri = wss_uri
-        return conn, metadata
-
-    def _reconnect(self) -> None:
-        """Reconnect with bounded exponential backoff, raising if the server stays down.
-
-        Raises RuntimeError rather than looping forever -- see RECONNECT_MAX_ATTEMPTS.
-        """
-        retry_delay = RECONNECT_INITIAL_DELAY_SECS
-        last_error: Exception | None = None
-        for attempt in range(1, RECONNECT_MAX_ATTEMPTS + 1):
-            logging.warning(
-                f"WebSocket connection closed. Reconnecting to {self._connected_uri} "
-                f"(attempt {attempt}/{RECONNECT_MAX_ATTEMPTS})..."
-            )
-            try:
-                self._ws, self._server_metadata = self._connect_once(self._connected_uri)
-                logging.info("Reconnected to server.")
-                return
-            except Exception as e:
-                last_error = e
-                logging.warning(f"Reconnect failed: {e}. Retrying in {retry_delay}s...")
-                time.sleep(retry_delay)
-                retry_delay = min(retry_delay * 2, RECONNECT_MAX_DELAY_SECS)
-        raise RuntimeError(
-            f"TiPToP server at {self._connected_uri} did not come back after "
-            f"{RECONNECT_MAX_ATTEMPTS} attempts; last error: {last_error!r}. "
-            f"Failing this cell rather than retrying indefinitely -- check the server log "
-            f"(it is not restarted automatically) and re-run; scripts/eval.py is resumable."
-        )
-
-    def infer(self, obs: dict) -> dict:
-        obs["endpoint"] = "infer"
-        data = self._packer.pack(obs)
-        try:
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
-            logging.warning(f"{type(e).__name__} during infer. Reconnecting and retrying...")
-            self._reconnect()
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        if isinstance(response, str):
-            import json
-
-            try:
-                return json.loads(response)
-            except json.JSONDecodeError:
-                raise RuntimeError(f"Error in inference server:\n{response}")
-        return msgpack_numpy.unpackb(response)
-
-    def reset(self, reset_info: dict = None) -> None:
-        if reset_info is None:
-            reset_info = {}
-        reset_info["endpoint"] = "reset"
-        data = self._packer.pack(reset_info)
-        try:
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        except (websockets.exceptions.ConnectionClosedError, TimeoutError) as e:
-            logging.warning(f"{type(e).__name__} during reset. Reconnecting and retrying...")
-            self._reconnect()
-            self._ws.send(data)
-            response = self._ws.recv(timeout=RECV_TIMEOUT_SECS)
-        return response
-
-    def get_server_metadata(self) -> dict:
-        return self._server_metadata
+            return json.loads(response)
+        except json.JSONDecodeError as e:
+            raise RuntimeError(f"Error in inference server:\n{response}") from e
 
 
 class TiptopPolicy(InferencePolicy):
@@ -160,6 +51,7 @@ class TiptopPolicy(InferencePolicy):
         self.remote_config = exp_config.policy_config.remote_config
         self.cam_obs_qpos = exp_config.policy_config.cam_obs_qpos
         self.cam_obs_n_steps = exp_config.policy_config.cam_obs_n_steps
+        self.camera_names = exp_config.policy_config.camera_names
         self.model = None
         self.reset()
 
@@ -200,9 +92,7 @@ class TiptopPolicy(InferencePolicy):
 
     def render(self, obs):
         # TiPToP uses just the wrist camera
-        wrist_camera_key = (
-            "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
-        )
+        _, wrist_camera_key = resolve_camera_keys(obs, self.camera_names)
         views = obs[wrist_camera_key]
         cv2.imshow("views", cv2.cvtColor(views, cv2.COLOR_RGB2BGR))
         cv2.waitKey(1)
@@ -220,9 +110,7 @@ class TiptopPolicy(InferencePolicy):
         """
         obs = obs[0]
 
-        wrist_camera_key = (
-            "wrist_camera_zed_mini" if "wrist_camera_zed_mini" in obs else "wrist_camera"
-        )
+        _, wrist_camera_key = resolve_camera_keys(obs, self.camera_names)
         camera_params = obs[f"sensor_param_{wrist_camera_key}"]
 
         # TiPToP's planning frame is the robot base link frame. The world coordinate frame differs from the

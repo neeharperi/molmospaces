@@ -17,12 +17,16 @@ would have caught them are worker balance and rate-against-baseline, so print bo
 Usage:  python3 scripts/lane_health.py [--date 20260828_full]
 """
 import argparse
+import contextlib
 import os
 import re
 import subprocess
 import time
 
-WORKER_RE = re.compile(r"Worker (\d+).*pipeline\.py:1003")
+# Pre-filter substring, kept in step with WORKER_RE below so the cheap scan and the regex
+# can never disagree about which lines are candidates.
+WORKER_MARKER = "pipeline.py:1003"
+WORKER_RE = re.compile(r"Worker (\d+).*" + re.escape(WORKER_MARKER))
 
 
 def cells_running():
@@ -42,10 +46,8 @@ def h5_stats(d):
     for root, _, files in os.walk(d):
         for f in files:
             if f.endswith(".h5"):
-                try:
+                with contextlib.suppress(OSError):
                     ts.append(os.path.getmtime(os.path.join(root, f)))
-                except OSError:
-                    pass
     return sorted(ts)
 
 
@@ -77,9 +79,12 @@ def main():
         try:
             with open(log, errors="ignore") as fh:
                 for line in fh:
+                    if WORKER_MARKER not in line:
+                        continue
                     m = WORKER_RE.search(line)
                     if m:
-                        counts[int(m.group(1))] = counts.get(int(m.group(1)), 0) + 1
+                        worker = int(m.group(1))
+                        counts[worker] = counts.get(worker, 0) + 1
         except OSError:
             pass
 

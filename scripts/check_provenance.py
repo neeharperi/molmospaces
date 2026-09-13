@@ -18,31 +18,33 @@ import json
 import sys
 from pathlib import Path
 
-import pandas as pd
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from eval_common import QUARANTINE_MARKERS, is_campaign_dir, read_overall  # noqa: E402
 
+# Fields that must be present and non-empty. Kept disjoint from NULLABLE_FIELDS below so the
+# two lists cannot disagree -- this used to be one combined list plus a skip-set that named
+# three of its own entries, so adding a field meant knowing which of the two to touch.
 REQUIRED_FIELDS = [
     "molmospaces_git_sha",
     "pinned_assets_file",
     "pinned_assets_sha256",
     "policy",
-    "policy_checkpoint",
     "task",
     "benchmark_dir",
     "eval_command",
     "eval_to_csv_command",
     "success_condition",
-    "task_horizon_steps",
-    "max_episodes",
     "seed",
     "n_episodes",
     "results_csv",
     "raw_output_dir",
     "timestamp",
 ]
-# May legitimately be None: task_horizon_steps (benchmark's own task_horizon_sec can be used
-# instead), max_episodes (None means "all episodes", the common case), and policy_checkpoint
+# Recorded in provenance.json but may legitimately be None, so they are documented rather than
+# checked: task_horizon_steps (the benchmark's own task_horizon_sec can be used instead),
+# max_episodes (None means "all episodes", the common case), and policy_checkpoint
 # (server-managed policies like tiptop have no client-side checkpoint path at all).
-OPTIONAL_NULLABLE_FIELDS = {"task_horizon_steps", "max_episodes", "policy_checkpoint"}
+NULLABLE_FIELDS = ("task_horizon_steps", "max_episodes", "policy_checkpoint")
 
 # Runs retired for a known reason are renamed rather than deleted, so the numbers stay
 # auditable and nobody re-derives a conclusion from them:
@@ -53,7 +55,6 @@ OPTIONAL_NULLABLE_FIELDS = {"task_horizon_steps", "max_episodes", "policy_checkp
 # Their provenance deliberately still points at the original pre-rename paths, so validating
 # them would always fail -- skip them by convention, and report the count so a retired run can
 # never be silently forgotten.
-QUARANTINE_MARKERS = ("_INVALID", "_STALE", "_superseded")
 
 
 def check_cell(provenance_path: Path) -> list[str]:
@@ -64,8 +65,6 @@ def check_cell(provenance_path: Path) -> list[str]:
         return [f"{provenance_path}: unreadable ({e})"]
 
     for field_name in REQUIRED_FIELDS:
-        if field_name in OPTIONAL_NULLABLE_FIELDS:
-            continue
         if provenance.get(field_name) in (None, ""):
             errors.append(f"{provenance_path}: missing required field '{field_name}'")
     if errors:
@@ -91,12 +90,11 @@ def check_cell(provenance_path: Path) -> list[str]:
     if errors:
         return errors
 
-    df = pd.read_csv(results_csv, comment="#")
-    overall = df[df["category"] == "OVERALL"]
-    if overall.empty:
-        errors.append(f"{provenance_path}: {results_csv} has no OVERALL row")
+    try:
+        csv_total = int(read_overall(results_csv)["total"])
+    except ValueError as e:
+        errors.append(f"{provenance_path}: {e}")
         return errors
-    csv_total = int(overall.iloc[0]["total"])
 
     n_episodes = provenance["n_episodes"]
     max_episodes = provenance.get("max_episodes")
@@ -120,13 +118,10 @@ def main() -> None:
     parser.add_argument("runs_dir", type=Path, help="Root runs/ directory to walk.")
     args = parser.parse_args()
 
-    # Skip underscore-prefixed DATE directories as well as the quarantined policy dirs below.
-    # A leading underscore marks "not a campaign result": handshakes, A/B arms, debug runs.
-    # compare_to_leaderboard.py applies the same rule -- it had to, after a 60-episode A/B arm
-    # in `_ab_C_dt100/` outsorted the real `20260828_full/` cell and was reported as a verdict.
+    # Skip underscore-prefixed DATE directories as well as the quarantined policy dirs below,
+    # via the same eval_common helper compare_to_leaderboard.py and category_mix_check.py use.
     all_provenance = sorted(
-        p for p in args.runs_dir.glob("*/*/*/provenance.json")
-        if not p.parent.name.startswith("_")
+        p for p in args.runs_dir.glob("*/*/*/provenance.json") if is_campaign_dir(p.parent)
     )
     provenance_files = [
         p for p in all_provenance
