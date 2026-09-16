@@ -36,15 +36,35 @@ with a process-level RNG whose position is not recoverable from the episode. So 
 image-level is assertable across two processes, in any harness, including this one against
 itself.
 
-What is asserted is what the episode spec fully determines: which house, and where the arm
-starts. That is not a weak pair. The start pose agreeing to 0.00e+00 rad means the robot
-placement, the base frame and the joint ordering all agree exactly -- which is the part
-`sim_server.py` translates and could get wrong.
+What is asserted is what the episode spec fully determines: the benchmark, the house, and
+the arm's start state.
+
+**Joint positions alone do not test the translation**, which is worth saying plainly because
+this check used to claim they did. `sim_server.py`'s `state()` returns `arm.joint_pos[:7]`
+untranslated, and `reference_state` below reads the same attribute -- so a 0.00e+00 agreement
+there is one number compared with itself, and it proves the two sides built the same episode
+and nothing more. It is still worth asserting for exactly that.
+
+So the translated quantities are asserted too, each against a reference derived here rather
+than borrowed from the server:
+
+  * `cartesian_position` -- `inv(base_to_world) @ leaf_frame_to_world`, with the rotation
+    checked by rebuilding it from the served roll/pitch/yaw through scipy's extrinsic "xyz",
+    the convention `droid/misc/transformations.py` uses. A transposed base frame, the flange
+    substituted for the tool centre point, or a different Euler convention all move this and
+    none of them moves `joint_pos`.
+  * `gripper_position` -- the Robotiq's joint range mapped to a 0..1 closed fraction.
+    `GRIPPER_JOINT_MAX` is declared below independently of `sim_server.py`'s copy, on purpose:
+    if one of the two changes, this is what says so.
+
+Depth is not covered: the rig requests it per role and nothing here asks for it, so the
+metres-to-uint16-millimetres conversion is still untested by this script.
 """
 
 from __future__ import annotations
 
 import argparse
+import gc
 import hashlib
 import os
 import pathlib
@@ -54,7 +74,15 @@ import numpy as np
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 
+# MolmoSpaces sensor name -> DROID camera role. A copy of scripts/sim_server.py:60 in the
+# droid checkout, which is a plain script rather than an importable module; the two must
+# track each other. (link_serial() below can import ROLE_SERIALS because that one does live
+# in a package.)
 CAMERA_ROLES = {"wrist_camera": "wrist", "exo_camera_1": "external", "exo_camera_2": "external_2"}
+
+# The Robotiq joint travel sim_server.py divides by to get a 0..1 closed fraction. Declared
+# here rather than imported so that the two copies disagreeing is a test failure.
+GRIPPER_JOINT_MAX = 0.9
 
 
 def digest(array) -> str:
@@ -78,16 +106,29 @@ def reference_episode(benchmark_dir: pathlib.Path, index: int):
     sampler.reset()
     task = sampler.sample_task()
     observations, _ = task.reset()
-    return spec, task, observations[0]
+    return spec, sampler, task, observations[0]
 
 
 def reference_state(task, obs):
-    """Joints, gripper and the camera images, in the units MolmoSpaces itself uses."""
+    """What MolmoSpaces itself holds, in its own units, for everything the server translates."""
     robot_view = task._env.robots[0].robot_view
+    arm_group = robot_view.get_move_group("arm")
     # `joint_pos`, the attribute sim_server.py reads, not a getter -- FrankaFR3ArmGroup has
-    # no get_joint_positions, and reading a different field would compare two numbers rather
-    # than one number twice.
-    arm = np.asarray(robot_view.get_move_group("arm").joint_pos, dtype=np.float64)[:7]
+    # no get_joint_positions. See the docstring for why this one is a number compared with
+    # itself, and what is asserted instead.
+    arm = np.asarray(arm_group.joint_pos, dtype=np.float64)[:7]
+
+    # The two frames the served cartesian_position is built from, kept as matrices so the
+    # composition happens here and not on the server's terms.
+    base_to_world = np.asarray(
+        robot_view.get_move_group("base").leaf_frame_to_world, dtype=np.float64
+    )
+    # leaf_frame_to_world on the arm is the grasp site -- the tool centre point, which is
+    # what libfranka's O_T_EE reports and therefore what the rig expects.
+    tcp_to_world = np.asarray(arm_group.leaf_frame_to_world, dtype=np.float64)
+
+    gripper_joints = np.asarray(robot_view.get_move_group("gripper").joint_pos, dtype=np.float64)
+
     images = {}
     for sensor, role in CAMERA_ROLES.items():
         entry = obs.get(sensor)
@@ -95,7 +136,7 @@ def reference_state(task, obs):
             continue
         rgb = entry["rgb"] if isinstance(entry, dict) else entry
         images[role] = np.asarray(rgb)
-    return arm, images
+    return arm, base_to_world, tcp_to_world, gripper_joints, images
 
 
 def main() -> int:
@@ -104,6 +145,13 @@ def main() -> int:
     parser.add_argument("--sim", default="ws://127.0.0.1:8600")
     parser.add_argument("--episodes", type=int, default=3)
     parser.add_argument("--tolerance", type=float, default=1e-6, help="rad, on the joint vector")
+    parser.add_argument(
+        "--pose-tolerance",
+        type=float,
+        default=1e-6,
+        help="m / rad, on the translated pose and gripper fraction. Separate from --tolerance "
+        "because these cross a float32 wire encoding and the joint vector does not",
+    )
     args = parser.parse_args()
 
     # droid's client, imported from the checkout beside this one. The point is to ask the
@@ -119,8 +167,22 @@ def main() -> int:
             print(f"\nepisode {index}")
             info = link.reset_episode(seed=index)
             served = info.get("episode") or {}
-            spec, task, obs = reference_episode(args.benchmark, index)
-            arm, images = reference_state(task, obs)
+            spec, sampler, task, obs = reference_episode(args.benchmark, index)
+            arm, base_to_world, tcp_to_world, gripper_joints, images = reference_state(task, obs)
+
+            # First, because it is the input error every other line would misattribute: two
+            # sides pointed at different benchmark directories disagree about the house and
+            # about the start pose, and would read as a broken translation layer.
+            served_bench = served.get("benchmark") or getattr(link, "benchmark", None)
+            if served_bench:
+                same_bench = os.path.realpath(str(served_bench)) == os.path.realpath(args.benchmark)
+                print(f"  {'reads the same benchmark':<44} {'ok' if same_bench else 'FAILED'}")
+                if not same_bench:
+                    print(f"       served    {served_bench}")
+                    print(f"       reference {args.benchmark}")
+                    print("       Nothing below is comparable; point both sides at one directory.")
+                    failures += 1
+                    break
 
             same_episode = str(served.get("house")) == str(getattr(spec, "house_index", None))
             print(f"  {'names the same house':<44} {'ok' if same_episode else 'FAILED'}"
@@ -130,8 +192,12 @@ def main() -> int:
             served_arm = np.asarray(link._state["joint_positions"], dtype=np.float64)
             delta = float(np.max(np.abs(served_arm[: len(arm)] - arm))) if len(arm) else float("nan")
             ok = delta <= args.tolerance
-            print(f"  {'the arm starts in the same place':<44} {'ok' if ok else 'FAILED'}  max |d| {delta:.2e} rad")
+            print(f"  {'the same episode (joints, untranslated)':<44} {'ok' if ok else 'FAILED'}  max |d| {delta:.2e} rad")
             failures += not ok
+
+            # ---- the translated quantities. These are what sim_server.py could get wrong.
+            failures += check_cartesian(link, base_to_world, tcp_to_world, args)
+            failures += check_gripper(link, gripper_joints, args)
 
             # Reported, not asserted. See the module docstring: with no seed in the episode
             # the scene randomisation is drawn from a process-level RNG, so two processes
@@ -139,8 +205,7 @@ def main() -> int:
             # a reason that has nothing to do with what this check exists to find. The frame
             # SIZE is still asserted, because that the episode does determine.
             for role, reference in sorted(images.items()):
-                exact = False
-                entry = link._frames.get(link_serial(link, role))
+                entry = link._frames.get(role_serial(role))
                 if entry is None:
                     print(f"  {role + ': frame arrived':<44} FAILED  nothing under that role")
                     failures += 1
@@ -152,19 +217,15 @@ def main() -> int:
                 same_shape = got.shape == reference.shape
                 identical = same_shape and bool(np.array_equal(got, reference))
                 detail = f"{digest(got)} vs {digest(reference)}" if same_shape else f"{got.shape} vs {reference.shape}"
-                if exact:
-                    print(f"  {role + ': the same pixels':<44} {'ok' if identical else 'FAILED'}  {detail}")
-                    failures += not identical
-                else:
-                    verdict = "same" if identical else "differs (unseeded; see docstring)"
-                    print(f"  {role + ': reported, not asserted':<44} {verdict:<8} {detail}")
+                verdict = "same" if identical else "differs (unseeded; see docstring)"
+                print(f"  {role + ': reported, not asserted':<44} {verdict:<8} {detail}")
                 # A shape mismatch is a real fault whichever camera it is: it means the two
                 # sides disagree about what the episode asked for, not about a random draw.
                 if not same_shape:
                     print(f"  {role + ': the same frame size':<44} FAILED  {got.shape} vs {reference.shape}")
                     failures += 1
 
-            task.close() if hasattr(task, "close") else None
+            release(sampler, task)
     finally:
         link.close()
 
@@ -175,11 +236,73 @@ def main() -> int:
     return 0
 
 
-def link_serial(link, role):
+def role_serial(role):
     """Which serial the client filed a role's frame under, without reimplementing the map."""
     from droid.sim.client import ROLE_SERIALS
 
     return ROLE_SERIALS.get(role)
+
+
+def release(sampler, task) -> None:
+    """Drop one episode's scene before building the next.
+
+    Both halves matter and scripts/sim_server.py's _release() documents why: MolmoSpaces'
+    BaseMujocoTask.__del__ raises on the way out, so an unguarded close() escapes the loop
+    and takes the verdict with it; and a sampler still referenced keeps its scene's model and
+    renderers alive, so a 20-episode run holds 20 of them beside the server's own.
+    """
+    for obj in (task, sampler):
+        closer = getattr(obj, "close", None)
+        if closer is None:
+            continue
+        try:
+            closer()
+        except Exception as exc:  # noqa: BLE001 - teardown must not decide the verdict
+            print(f"  (ignoring {type(obj).__name__}.close(): {type(exc).__name__}: {exc})")
+    gc.collect()
+
+
+def check_cartesian(link, base_to_world, tcp_to_world, args) -> int:
+    """The served base-frame TCP pose, against one composed here.
+
+    Position and orientation are separated because they fail for different reasons: a wrong
+    base frame or the flange in place of the tool centre point moves the position, while a
+    different Euler convention moves only the rotation.
+    """
+    served = link._state.get("cartesian_position")
+    if served is None:
+        print(f"  {'cartesian_position arrived':<44} FAILED  the server sent none")
+        return 1
+    served = np.asarray(served, dtype=np.float64)
+
+    expected = np.linalg.inv(base_to_world) @ tcp_to_world
+    d_pos = float(np.max(np.abs(served[:3] - expected[:3, 3])))
+    ok_pos = d_pos <= args.pose_tolerance
+    print(f"  {'the same tool pose (base frame, position)':<44} {'ok' if ok_pos else 'FAILED'}  max |d| {d_pos:.2e} m")
+
+    # Rebuilt through scipy rather than droid's matrix_to_pose, so the conversion itself is
+    # under test rather than compared with its own output.
+    from scipy.spatial.transform import Rotation
+
+    got_rotation = Rotation.from_euler("xyz", served[3:6]).as_matrix()
+    d_rot = float(np.max(np.abs(got_rotation - expected[:3, :3])))
+    ok_rot = d_rot <= args.pose_tolerance
+    print(f"  {'the same tool pose (base frame, rotation)':<44} {'ok' if ok_rot else 'FAILED'}  max |d| {d_rot:.2e}")
+    return (not ok_pos) + (not ok_rot)
+
+
+def check_gripper(link, gripper_joints, args) -> int:
+    """The served 0..1 closed fraction, against the Robotiq joint travel it came from."""
+    served = link._state.get("gripper_position")
+    if served is None:
+        print(f"  {'gripper_position arrived':<44} FAILED  the server sent none")
+        return 1
+    expected = float(np.clip(np.mean(gripper_joints) / GRIPPER_JOINT_MAX, 0.0, 1.0))
+    delta = abs(float(served) - expected)
+    ok = delta <= args.pose_tolerance
+    print(f"  {'the same gripper fraction':<44} {'ok' if ok else 'FAILED'}  "
+          f"served {float(served):.6f} vs {expected:.6f}")
+    return not ok
 
 
 if __name__ == "__main__":
