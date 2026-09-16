@@ -70,7 +70,12 @@ _EXPECTED_DATA_VERSIONS = {
         "rby1m": "20251224",
         "franka_droid": "20260127",
         "floating_rum": "20251110",
-        "g1": "20260815",
+        # Two accepted, as several scene and object entries below already are. Upstream
+        # bumped g1 to 20260815 after reference/pinned_assets_20260816.json recorded what
+        # the DROID benchmarks were built against, and no DROID benchmark instantiates a
+        # g1 -- so demanding the newer one would force a download of an unused humanoid
+        # and move the asset set away from the pinned record for no gain.
+        "g1": ["20260815", "20260802"],
     },
     "scenes": {
         "ithor": ["20251217", "20251217_with_occupancy"],

@@ -85,6 +85,7 @@ def run_cell(
     max_episodes: int | None,
     num_workers: int | None,
     checkpoint_path: str | None = None,
+    benchmark_dir_override: Path | None = None,
 ) -> bool:
     task = TASKS[task_name]
     policy = POLICIES[policy_name]
@@ -109,7 +110,12 @@ def run_cell(
         print(f"[FAIL] {policy_name}/{task_name}: {err}")
         return False
 
-    benchmark_dir = resolve_benchmark_dir(task)
+    # A subsampled draw (scripts/benchmarks/subsample_benchmark.py) is the SAME task run
+    # over fewer episodes, not a new one, so it keeps the task's name and its leaderboard
+    # row and is separated by --date instead. Naming it `Close-v1-smoke50` would have put
+    # it outside TASKS and therefore outside compare_to_leaderboard.py and
+    # category_mix_check.py, which are exactly the tools a small cell needs most.
+    benchmark_dir = benchmark_dir_override or resolve_benchmark_dir(task)
     eval_output_dir = cell_dir / "eval_output"
 
     eval_cmd = [
@@ -192,6 +198,11 @@ def run_cell(
         "policy_checkpoint_overridden": checkpoint_path is not None,
         "task": task_name,
         "benchmark_dir": str(benchmark_dir),
+        # Which draw, not just which directory: a subsample is regenerable but not
+        # unique, and a cell whose number cannot be traced to an episode list is an
+        # anecdote. sha256 of the benchmark.json actually evaluated.
+        "benchmark_sha256": sha256_of(benchmark_dir / "benchmark.json"),
+        "benchmark_dir_overridden": benchmark_dir_override is not None,
         "eval_command": " ".join(eval_cmd),
         "eval_to_csv_command": " ".join(csv_cmd),
         "success_condition": "both",
@@ -228,6 +239,15 @@ def main() -> None:
         "with a non-default checkpoint (e.g. a fine-tune ladder rung) so provenance records "
         "what was actually served rather than PolicySpec's static default.",
     )
+    parser.add_argument(
+        "--benchmark-dir",
+        type=Path,
+        default=None,
+        help="Evaluate this benchmark directory instead of the task's own. For a "
+        "subsampled draw from scripts/benchmarks/subsample_benchmark.py: the cell keeps "
+        "the task name (so the leaderboard tooling still applies) and is separated by "
+        "--date. Recorded in provenance with the benchmark.json hash.",
+    )
     args = parser.parse_args()
 
     policy_names = sorted(POLICIES) if args.all_policies else ([args.policy] if args.policy else None)
@@ -252,6 +272,7 @@ def main() -> None:
                 max_episodes=args.max_episodes,
                 num_workers=args.num_workers,
                 checkpoint_path=args.checkpoint_path,
+                benchmark_dir_override=args.benchmark_dir,
             )
             results.append((policy_name, task_name, ok))
 

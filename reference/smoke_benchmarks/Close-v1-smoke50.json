@@ -1,0 +1,60 @@
+{
+  "source": "/home/nperi/mlspaces-assets/benchmarks/molmospaces-bench-v1/ithor/FrankaCloseDataGenConfig/FrankaCloseDataGenConfig_20260123_json_benchmark",
+  "source_sha256": "efb6c8f2aa03d21d74f5fa953189f9877f99829bcfb722cc8d6a8ace85c5e559",
+  "source_episodes": 915,
+  "seed": 42,
+  "requested_episodes": 50,
+  "requested_houses": 10,
+  "drawn_episodes": 50,
+  "houses": [
+    15,
+    17,
+    18,
+    20,
+    21,
+    222,
+    224,
+    317,
+    323,
+    418
+  ],
+  "episodes_per_house": {
+    "15": 5,
+    "17": 4,
+    "18": 4,
+    "20": 5,
+    "21": 1,
+    "222": 5,
+    "224": 9,
+    "317": 2,
+    "323": 14,
+    "418": 1
+  },
+  "max_episodes_in_one_house": 14,
+  "category_counts": {
+    "Cabinet": 3,
+    "Chestofdrawers": 9,
+    "Desk": 4,
+    "Drawer": 17,
+    "Stand": 17
+  },
+  "category_share_drawn": {
+    "Cabinet": 0.06,
+    "Chestofdrawers": 0.18,
+    "Desk": 0.08,
+    "Drawer": 0.34,
+    "Stand": 0.34
+  },
+  "category_share_source": {
+    "Cabinet": 0.0481,
+    "Chestofdrawers": 0.2295,
+    "Coffeetable": 0.0022,
+    "Desk": 0.0459,
+    "Door": 0.0033,
+    "Drawer": 0.3257,
+    "Refrigerator": 0.0022,
+    "Safe": 0.0011,
+    "Stand": 0.3421
+  },
+  "total_variation_distance": 0.0604
+}

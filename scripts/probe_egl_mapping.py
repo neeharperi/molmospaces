@@ -2,9 +2,11 @@
 """Map MUJOCO_EGL_DEVICE_ID -> physical GPU on THIS host.
 
     conda activate mlspaces-classic && python scripts/probe_egl_mapping.py
+    ... --infer-only    # the DRM hint alone, no rendering, nothing written
 
 Run once per machine, before scheduling any parallel campaign, and record the result in
-docs/eval_reproduction.md.
+docs/eval_reproduction.md. It renders on each EGL device for ~15 s, so run it when the GPUs
+are quiet -- a lane churning memory next door makes the deltas unreadable and it says so.
 
 Why this exists. scripts/run_full_matrix.sh used to hardcode MUJOCO_EGL_DEVICE_ID=1 with a
 comment that the EGL index was REVERSED from nvidia-smi's ordering "on this host" -- true of
@@ -23,7 +25,17 @@ to an nvidia-smi index. Both node flavours must be handled: EGL_DRM_DEVICE_FILE_
 PRIMARY node (/dev/dri/cardN) on this driver, not a render node (/dev/dri/renderDN), and a
 lookup table built from only `*-render` symlinks silently resolves nothing.
 
-Measured on this host (4x H100 NVL, driver 570.207), the mapping is REVERSED and has a
+Measured on the 2x RTX PRO 5000 Blackwell host (driver 580.178.04), the mapping is REVERSED
+and the DRM inference gets it wrong:
+
+    EGL 0 -> card0 -> 01:00.0 -> inferred GPU 0, MEASURED GPU 1
+    EGL 1 -> card2 -> c1:00.0 -> inferred GPU 1, MEASURED GPU 0
+    EGL 2 -> (EGLError; no DRM node)
+
+That is why measurement is now the default rather than the fallback: the inference resolved
+cleanly here and concluded "identity", which is the one wrong answer that looks right.
+
+Measured on the 4x H100 NVL host (driver 570.207), the mapping is REVERSED and has a
 non-GPU entry:
 
     EGL 0 -> card4 -> ae:00.0 -> nvidia-smi GPU 3
@@ -100,7 +112,7 @@ def gpu_mem() -> list[int]:
     return [int(x) for x in out.split()]
 
 
-def measure_mapping(n_devices: int) -> None:
+def measure_mapping(n_devices: int) -> list[tuple[int, int]]:
     """Render on each EGL device and see which GPU's memory moves.
 
     Ground truth, and the reason this mode exists: under the NVIDIA EGL vendor the devices are
@@ -146,8 +158,9 @@ def measure_mapping(n_devices: int) -> None:
             print(f"    to render on nvidia-smi GPU {g}  ->  MUJOCO_EGL_DEVICE_ID={i}")
     else:
         print("\n  Nothing measurable. Re-run when the GPUs are quieter.")
-        return
+        return []
     write_map(good)
+    return good
 
 
 def write_map(pairs: list[tuple[int, int]]) -> None:
@@ -167,7 +180,16 @@ def write_map(pairs: list[tuple[int, int]]) -> None:
 
 
 def main() -> None:
-    measure = "--measure" in sys.argv
+    # Measurement is the default, and the DRM inference below is only a cross-check.
+    #
+    # It used to be the other way round -- infer, and measure only when inference resolved
+    # nothing -- and on the 2x RTX PRO 5000 host that silently produced the wrong answer.
+    # There the inference resolves cleanly (EGL 0 -> card0 -> 01:00.0 -> GPU 0) and concludes
+    # identity, while an allocation measurement shows EGL 0 rendering on GPU **1**: the
+    # mapping is reversed. Inference resolving nothing is a visible failure that already fell
+    # back to measurement; inference resolving *wrongly* is not, and it costs exactly the
+    # parallelism this script exists to protect -- every lane on one card, nothing erroring.
+    infer_only = "--infer-only" in sys.argv
     node2pci, pci2smi = drm_node_to_pci(), pci_to_smi_index()
     devices = EGL.eglQueryDevicesEXT()
     print(f"EGL reports {len(devices)} device(s); nvidia-smi reports {len(pci2smi)} GPU(s)\n")
@@ -186,22 +208,30 @@ def main() -> None:
 
     resolved = [(i, s) for i, s in rows if s != "?"]
     print()
-    if measure or not resolved:
-        if not resolved:
-            print("  Inference resolved nothing (expected under the NVIDIA EGL vendor, whose")
-            print("  devices are not DRM devices). Falling back to measurement.")
-        measure_mapping(len(devices))
-        return
-    if len(resolved) < len(pci2smi):
-        print(f"  WARNING: only {len(resolved)} of {len(pci2smi)} GPUs resolved.")
-    identity = all(str(s) == str(i) for i, s in resolved)
-    if identity:
-        print("  Mapping is IDENTITY: MUJOCO_EGL_DEVICE_ID == nvidia-smi index.")
+    if not resolved:
+        print("  Inference resolved nothing (expected under the NVIDIA EGL vendor, whose")
+        print("  devices are not DRM devices).")
+    elif len(resolved) < len(pci2smi):
+        print(f"  Inference resolved only {len(resolved)} of {len(pci2smi)} GPUs.")
     else:
-        print("  Mapping is NOT identity -- use the table below, NOT the nvidia-smi index.")
-    print("\n  Lane assignment, as MUJOCO_EGL_DEVICE_ID values:")
-    for i, smi in sorted(resolved, key=lambda r: int(r[1])):
-        print(f"    to render on nvidia-smi GPU {smi}  ->  MUJOCO_EGL_DEVICE_ID={i}")
+        print("  Inference suggests: " + ", ".join(f"EGL {i} -> GPU {s}" for i, s in resolved))
+
+    if infer_only:
+        print("\n  --infer-only: not measured, so not written. This is a hint, not the mapping.")
+        return
+
+    measured = measure_mapping(len(devices))
+    if measured and resolved:
+        inferred = {i: str(s) for i, s in resolved}
+        disagree = [(i, g) for i, g in measured if i in inferred and inferred[i] != str(g)]
+        if disagree:
+            # Loudly, because the inference is the thing a reader would otherwise have
+            # believed, and it is what an earlier version of this script wrote down.
+            print("\n  WARNING: the DRM inference DISAGREES with what was measured:")
+            for i, gpu in disagree:
+                print(f"    EGL {i}: inferred GPU {inferred[i]}, measured GPU {gpu}")
+            print("  The measurement is the mapping. The inference is resolving DRM nodes,")
+            print("  which under this vendor do not correspond to the devices EGL hands out.")
 
 
 if __name__ == "__main__":
