@@ -289,7 +289,13 @@ setup_molmoact2() {
     # The server is FastAPI and json_numpy is its wire format. Deliberately NOT installing
     # openpi-client here: this policy speaks HTTP, and staying off openpi-client frees this env
     # from its numpy<2 pin.
-    "$PIP" install fastapi "uvicorn[standard]" json-numpy
+    #
+    # msgpack, though, is not optional. host_server_droid.py now serves droid's msgpack
+    # protocol alongside the original json_numpy one and imports msgpack at module scope, so
+    # an env without it dies on import rather than on a request -- which reads as the server
+    # failing to start for no stated reason. Just the codec, not openpi-client, so the numpy
+    # pin stays out.
+    "$PIP" install fastapi "uvicorn[standard]" json-numpy "msgpack>=1.0"
     # Nothing to patch here any more: the action_mode -> inference_action_mode rename the
     # live checkpoint requires landed upstream in allenai/molmoact2, and so did the Blackwell
     # torch bump (further than we asked -- upstream went to 2.11.0 on cu128).

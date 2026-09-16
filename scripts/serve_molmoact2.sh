@@ -10,10 +10,15 @@
 # the molmoact2 checkout's uv venv: the submodule's pyproject pins torch 2.5.1+cu121, and the
 # env recipe in scripts/setup_envs.sh is what the campaign's results are pinned to.
 #
-# The vendored host_server_droid.py needs scripts/molmoact2_patches/0001-*.patch applied --
-# the live allenai/MolmoAct2-DROID remote code (fetched fresh via trust_remote_code, so NOT
-# pinned by the submodule) renamed action_mode -> inference_action_mode, and the unpatched
-# call raises. That rename landed upstream in allenai/molmoact2, so a current checkout has it.
+# No patch is needed any more. This used to apply scripts/molmoact2_patches/0001-*.patch for
+# the action_mode -> inference_action_mode rename in the live allenai/MolmoAct2-DROID remote
+# code; that rename landed upstream in allenai/molmoact2, so a current checkout has it and
+# 349b00c removed the patch directory.
+#
+# The env does need `msgpack`, which the recipe in scripts/setup_envs.sh predates:
+# host_server_droid.py serves droid's msgpack protocol alongside the original json_numpy one
+# and imports it at module scope, so without it this dies on import rather than on a request.
+#   conda activate mlspaces-molmoact2 && pip install "msgpack>=1.0" --no-deps
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
