@@ -173,10 +173,18 @@ def main() -> int:
             # First, because it is the input error every other line would misattribute: two
             # sides pointed at different benchmark directories disagree about the house and
             # about the start pose, and would read as a broken translation layer.
+            # The server reports this twice and in two forms: the greeting carries the full
+            # path (sim_server.py:465) and each episode reply carries just the directory name
+            # (:419). Compared by basename, which is defined for both -- a benchmark
+            # directory's name is its identity here, and two directories of that name holding
+            # different episodes is not a confusion this can resolve anyway.
             served_bench = served.get("benchmark") or getattr(link, "benchmark", None)
             if served_bench:
-                same_bench = os.path.realpath(str(served_bench)) == os.path.realpath(args.benchmark)
-                print(f"  {'reads the same benchmark':<44} {'ok' if same_bench else 'FAILED'}")
+                same_bench = os.path.basename(str(served_bench).rstrip("/")) == os.path.basename(
+                    str(args.benchmark).rstrip("/")
+                )
+                print(f"  {'reads the same benchmark':<44} {'ok' if same_bench else 'FAILED'}"
+                      f"  {os.path.basename(str(served_bench).rstrip('/'))}")
                 if not same_bench:
                     print(f"       served    {served_bench}")
                     print(f"       reference {args.benchmark}")
