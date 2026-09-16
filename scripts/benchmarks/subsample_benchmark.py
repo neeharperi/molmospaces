@@ -58,13 +58,33 @@ def category_of(episode: dict) -> str:
     return _simplify(cleaned.split()[0] if cleaned else "unknown")
 
 
-def largest_remainder(counts: dict, total: int) -> dict:
-    """Apportion ``total`` across ``counts`` in proportion, without losing anyone.
+def raw_category_of(episode: dict) -> str:
+    """The object category keyed the way the SOURCE benchmark_metadata.json keys it.
 
-    Plain rounding either overshoots or silently drops every category whose share rounds
-    below 0.5 -- which on Close-v1 is the four rarest of nine, exactly the ones a truncated
-    run already loses. Largest-remainder keeps the sum exact and hands the leftovers to the
-    categories that were rounded down hardest.
+    `category_of` above returns `_simplify`'d labels, because those are what the results CSV
+    and category_mix_check.py use. The source metadata uses the raw lowercase name instead
+    ('stand', 'chestofdrawers'), and writing our labels under the source's field name made
+    one key mean two different partitions across the two files.
+    """
+    raw = (episode.get("task") or {}).get("pickup_obj_name") or "unknown"
+    cleaned = "".join(c if c.isalpha() else " " for c in raw).strip()
+    return (cleaned.split()[0] if cleaned else "unknown").lower()
+
+
+def largest_remainder(counts: dict, total: int) -> dict:
+    """Apportion ``total`` across ``counts`` in proportion, keeping the sum exact.
+
+    Plain rounding overshoots or undershoots the total; largest-remainder does not, because
+    the leftovers go to the categories rounded down hardest.
+
+    **It does not rescue the rare categories, and the manifest says so.** On Close-v1 at
+    total=50 the exact quotas run 17.1, 16.3, 11.5, 2.4, 2.3, 0.17, 0.11, 0.11, 0.055; the
+    floors sum to 48, so two leftovers go to the two largest fractions and the four rarest
+    of nine still draw zero -- see ``category_counts`` against ``category_share_source`` in
+    reference/smoke_benchmarks/Close-v1-smoke50.json. What this buys over truncation is that
+    the categories that *do* appear appear in the source's proportions, which is what
+    category_mix_check.py reweights against. Covering the tail needs a larger draw, not a
+    better apportionment.
     """
     pool = sum(counts.values())
     if pool == 0 or total <= 0:
@@ -169,6 +189,12 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42, help="eval.py also hardcodes 42")
     parser.add_argument("--out-name", required=True, help="directory name under --out-root")
     parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="replace a draw already at --out-name whose seed/size/source differs. Refused by "
+        "default: any cell run against it recorded that benchmark.json's hash",
+    )
+    parser.add_argument(
         "--out-root",
         type=pathlib.Path,
         default=None,
@@ -191,6 +217,26 @@ def main() -> int:
             raise SystemExit("set MLSPACES_ASSETS_DIR, or pass --out-root")
         out_root = pathlib.Path(assets) / "benchmarks" / "smoke"
     out = out_root / args.out_name
+    existing_manifest = out / "subsample_manifest.json"
+    source_sha = hashlib.sha256(raw).hexdigest()
+    if existing_manifest.exists() and not args.overwrite:
+        prior = json.loads(existing_manifest.read_text())
+        request = ("seed", "requested_episodes", "requested_houses", "source_sha256")
+        mine = (args.seed, args.episodes, args.houses, source_sha)
+        if tuple(prior.get(key) for key in request) != mine:
+            # A cell's provenance records benchmark_sha256 of this directory's benchmark.json
+            # (scripts/eval.py). Replacing the file under the same name leaves that hash
+            # matching nothing on disk, so the cell's number can no longer be traced to an
+            # episode list -- the anecdote eval.py's hash exists to prevent.
+            raise SystemExit(
+                f"{out} already holds a different draw.\n"
+                + "".join(
+                    f"  {key:<20} there {prior.get(key)!r:<24} here {value!r}\n"
+                    for key, value in zip(request, mine, strict=True)
+                )
+                + "Any cell already run against it recorded that benchmark's hash. Use a new\n"
+                "--out-name, or --overwrite if you are certain nothing depends on this one."
+            )
     out.mkdir(parents=True, exist_ok=True)
 
     drawn, houses = draw(episodes, args.episodes, args.houses, args.seed)
@@ -205,17 +251,30 @@ def main() -> int:
     source_metadata = args.source / "benchmark_metadata.json"
     if source_metadata.exists():
         metadata = json.loads(source_metadata.read_text())
+    # Every per-episode count in the source describes the source, so leaving any of them
+    # alongside num_episodes=50 makes the file contradict itself. Recompute the ones the
+    # drawn episodes determine; drop the one they do not.
+    raw_mix = collections.Counter(raw_category_of(e) for e in drawn)
     metadata.update(
         description=f"{args.episodes}-episode category-matched subsample of {args.source.name}",
         num_episodes=len(drawn),
         num_houses=len(houses),
-        object_category_counts={key: drawn_mix[key] for key in sorted(drawn_mix)},
+        # Keyed as the source keys it. Our _simplify'd view is in subsample_manifest.json.
+        object_category_counts={key: raw_mix[key] for key in sorted(raw_mix)},
+        task_cls_counts=dict(sorted(collections.Counter(
+            (e.get("task") or {}).get("task_cls", "unknown") for e in drawn).items())),
+        robot_counts=dict(sorted(collections.Counter(
+            (e.get("robot") or {}).get("robot_name", "unknown") for e in drawn).items())),
+        house_counts=dict(sorted(per_house.items())),
     )
+    # Episode length is a property of a recorded trajectory, not of the spec, so a draw
+    # cannot recompute it. Carrying the source's would state 915 episodes' statistics over 50.
+    metadata.pop("episode_length_stats", None)
     (out / "benchmark_metadata.json").write_text(json.dumps(metadata, indent=2))
 
     manifest = {
         "source": str(args.source),
-        "source_sha256": hashlib.sha256(raw).hexdigest(),
+        "source_sha256": source_sha,
         "source_episodes": len(episodes),
         "seed": args.seed,
         "requested_episodes": args.episodes,
