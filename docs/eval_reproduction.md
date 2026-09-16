@@ -4409,9 +4409,15 @@ build 1  arm=c0bfb6e9ae53  wrist_camera=a5158ddbb66d5b62  exo_camera_1=7f9e5e564
 build 2  arm=c0bfb6e9ae53  wrist_camera=a5158ddbb66d5b62  exo_camera_1=ae9281f6302e41de
 ```
 
-The arm's start pose is bit-identical and so is the wrist view -- it is robot-mounted, so it
-follows the arm and nothing else. The **exocentric view differs**, because whatever places it
-is not seeded from the episode, and the episode has no seed to offer.
+The arm's start pose is bit-identical. The **exocentric view differs**, because whatever
+randomises it is not seeded from the episode, and the episode has no seed to offer.
+
+The wrist view is identical *within* a process here, and measuring it **across** processes
+refines the picture rather than confirming it: across three episodes and two attempts it
+sometimes agreed and sometimes did not, with no pattern tied to the episode -- consistent
+with a process-level RNG whose position is not recoverable from the episode. So the wrist
+view is only incidentally stable; it is not a determinate function of the episode either, and
+nothing image-level is assertable across two processes.
 
 Consequences, in order of how much they matter:
 
@@ -4421,18 +4427,21 @@ Consequences, in order of how much they matter:
    run to run. That is the mechanism behind the closed-loop flips measured above, and it
    means a cell's variance is wider than its binomial interval implies.
 2. **Per-episode outcome identity can never be a cross-harness criterion**, and neither can
-   byte-level image parity on the exterior view. `scripts/check_sim_server_parity.py`
-   therefore asserts the house, the arm's start pose and the wrist view, and *reports* the
-   exterior view with the reason.
+   byte-level image parity on *either* camera. `scripts/check_sim_server_parity.py` therefore
+   asserts what the episode spec fully determines -- which house, where the arm starts, and
+   the frame size -- and reports both images with the reason. That is not a weak pair: a
+   start pose agreeing to 0.00e+00 rad over three episodes means the robot placement, the
+   base frame and the joint ordering all agree exactly, and those are what `sim_server.py`
+   translates and could get wrong.
 3. It is fixable upstream: seed the placement from the episode index or from a
    benchmark-level seed, and write the seed into the spec. Not attempted here -- it would
    change every number on the leaderboard, which is a decision rather than a fix.
 
 What the parity check does establish, and it is the environment half of the Phase-3 question:
-for a given index, droid's `sim_server.py --benchmark` and this harness build **the same
-house, the same start pose and the same wrist view**, so the translation layer that is not
-shared between them -- world frame to robot base, sensor names to DROID camera roles,
-Robotiq 0..255 to a 0..1 closed fraction, metres to uint16 millimetres -- is right.
+for a given index, droid's `sim_server.py --benchmark` and this harness build **the same house
+and put the arm in exactly the same place**, so the translation layer that is not shared
+between them -- world frame to robot base, sensor names to DROID camera roles, Robotiq 0..255
+to a 0..1 closed fraction, metres to uint16 millimetres -- is right where it can be checked.
 
 ### The rig's per-tick ceiling bites hard on the jointpos checkpoint
 
@@ -4462,8 +4471,8 @@ the same count, on a benchmark whose exterior camera is redrawn per build.
 
 So the answer to "does calling a policy through the droid harness match running it natively"
 is: **no difference is detectable above the benchmark's own run-to-run variance**, with the
-environment half proven exactly (same house, same start pose, byte-identical wrist view) and
-two named reasons a sharper statement is not reachable — the unseeded exterior camera, and
+environment half proven as exactly as the benchmark permits (same house, start pose identical
+to 0.00e+00 rad) and two named reasons a sharper statement is not reachable — the unseeded exterior camera, and
 the rig's per-tick ceiling, which scaled 12% of ticks even at four times the rig's proven
 limit.
 

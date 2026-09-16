@@ -27,13 +27,19 @@ The reference episode is built in this process rather than read from a recorded 
 comparison needs no prior cell -- and it is built from the same benchmark directory the
 server was given, which the server reports back so a mismatch is caught rather than compared.
 
-**The exterior view is reported, not asserted, and that is a fact about the benchmark rather
-than a weakness here.** An `EpisodeSpec` carries `seed: null`, so whatever places the
-exocentric camera is not seeded from the episode -- building the same index twice *in one
-process* yields a different `exo_camera_1` image and an identical `wrist_camera` image. So no
-two runs of an episode agree on the exterior view, in any harness, including this one against
-itself. The wrist camera is robot-mounted and follows the arm, which is why it is exact and
-is the thing worth asserting.
+**Images are reported, not asserted, and that is a fact about the benchmark rather than a
+weakness here.** An `EpisodeSpec` carries `seed: null`, so whatever randomises a scene is not
+seeded from the episode: building the same index twice *in one process* gives a bit-identical
+arm pose and a different `exo_camera_1` image. Measured across processes the wrist view
+sometimes agrees and sometimes does not, with no pattern tied to the episode -- consistent
+with a process-level RNG whose position is not recoverable from the episode. So nothing
+image-level is assertable across two processes, in any harness, including this one against
+itself.
+
+What is asserted is what the episode spec fully determines: which house, and where the arm
+starts. That is not a weak pair. The start pose agreeing to 0.00e+00 rad means the robot
+placement, the base frame and the joint ordering all agree exactly -- which is the part
+`sim_server.py` translates and could get wrong.
 """
 
 from __future__ import annotations
@@ -127,11 +133,13 @@ def main() -> int:
             print(f"  {'the arm starts in the same place':<44} {'ok' if ok else 'FAILED'}  max |d| {delta:.2e} rad")
             failures += not ok
 
-            # Asserted for the wrist, reported for the rest. See the module docstring: the
-            # exocentric camera is redrawn per build because the episode carries no seed, so
-            # requiring it to match would make this check fail always and mean nothing.
+            # Reported, not asserted. See the module docstring: with no seed in the episode
+            # the scene randomisation is drawn from a process-level RNG, so two processes
+            # agree on the first build and not afterwards -- an assertion here would fail for
+            # a reason that has nothing to do with what this check exists to find. The frame
+            # SIZE is still asserted, because that the episode does determine.
             for role, reference in sorted(images.items()):
-                exact = role == "wrist"
+                exact = False
                 entry = link._frames.get(link_serial(link, role))
                 if entry is None:
                     print(f"  {role + ': frame arrived':<44} FAILED  nothing under that role")
