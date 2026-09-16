@@ -100,7 +100,7 @@ def report(native: dict, rig: dict, label_a: str, label_b: str) -> int:
 
     if not shared:
         print("\n  Nothing in common. Were the two run against the same benchmark?")
-        return 1
+        return 2  # VOID: nothing was compared. Saying DIVERGED here asserts a result.
 
     disagreements = [key for key in shared if native[key] != rig[key]]
     for key in disagreements:
@@ -112,7 +112,8 @@ def report(native: dict, rig: dict, label_a: str, label_b: str) -> int:
         print(f"  {len(only_rig)} episode(s) only in {label_b}, e.g. {only_rig[:3]}")
 
     agreed = len(shared) - len(disagreements)
-    print(f"\n  agreed on {agreed}/{len(shared)}")
+    coverage = 100.0 * len(shared) / max(len(native), 1)
+    print(f"\n  agreed on {agreed}/{len(shared)} shared episode(s) -- {coverage:.1f}% of {label_a}'s cell")
     return 1 if disagreements else 0
 
 
@@ -138,6 +139,12 @@ def main() -> int:
         shared = set(native) & set(control)
         flipped = [key for key in sorted(shared) if native[key] != control[key]]
         print(f"  {len(shared)} shared, {len(flipped)} flipped between two native runs")
+        if not shared:
+            print(
+                "\n  The two native logs have no episode in common, so nothing was controlled.\n"
+                "  --control wants a second run of the SAME cell. VOID, not passing."
+            )
+            return 2
         if flipped:
             print(
                 "\n  The policy does not reproduce itself, so a cross-harness difference cannot be\n"
@@ -151,9 +158,15 @@ def main() -> int:
     rig = rig_outcomes(args.rig_results, args.metric)
     status = report(native, rig, "native", "rig")
     print()
+    if status == 2:
+        # print + return, not SystemExit(str): a string argument exits 1, which is the
+        # DIVERGED code, and collapsing the two is the distinction this exists to make.
+        print("VOID: no episode was compared, so neither harness was judged.")
+        return 2
     if status:
         raise SystemExit("DIVERGED: the two harnesses did not agree.")
-    print("OK -- the rig and the native harness agree, episode for episode.")
+    shared = len(set(native) & set(rig))
+    print(f"OK -- the rig and the native harness agree on all {shared} episode(s) they both ran.")
     return 0
 
 

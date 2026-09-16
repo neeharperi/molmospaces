@@ -99,9 +99,35 @@ def run_cell(
     provenance_path = cell_dir / "provenance.json"
     results_csv = cell_dir / "results.csv"
 
-    if not force and provenance_path.exists() and results_csv.exists():
-        print(f"[skip] {policy_name}/{task_name}: already complete at {cell_dir}")
-        return True
+    # A subsampled draw (scripts/benchmarks/subsample_benchmark.py) is the SAME task run
+    # over fewer episodes, not a new one, so it keeps the task's name and its leaderboard
+    # row and is separated by --date instead. Naming it `Close-v1-smoke50` would have put
+    # it outside TASKS and therefore outside compare_to_leaderboard.py and
+    # category_mix_check.py, which are exactly the tools a small cell needs most.
+    benchmark_dir = benchmark_dir_override or resolve_benchmark_dir(task)
+
+    # --date is what separates two draws of one task, and nothing used to enforce it. A cell
+    # is identified by (policy, task, date) but its number is only meaningful together with
+    # the episode list it came from, so a second --benchmark-dir under the same --date is
+    # either a skip that reports the wrong n or a --force that destroys a cell that took
+    # tens of minutes. benchmark_sha256 is already recorded for exactly this comparison;
+    # read it back before doing either.
+    if provenance_path.exists() and results_csv.exists():
+        prior = json.loads(provenance_path.read_text())
+        recorded = prior.get("benchmark_sha256")
+        current = sha256_of(benchmark_dir / "benchmark.json")
+        if recorded and current and recorded != current:
+            print(
+                f"[FAIL] {policy_name}/{task_name}: {cell_dir} already holds a cell run "
+                f"against a different benchmark.\n"
+                f"        recorded {recorded[:16]}  ({prior.get('benchmark_dir')})\n"
+                f"        current  {current[:16]}  ({benchmark_dir})\n"
+                f"        Give this draw its own --date; --force would overwrite the other one."
+            )
+            return False
+        if not force:
+            print(f"[skip] {policy_name}/{task_name}: already complete at {cell_dir}")
+            return True
 
     if err := check_env_matches(task):
         print(f"[FAIL] {policy_name}/{task_name}: {err}")
@@ -110,12 +136,6 @@ def run_cell(
         print(f"[FAIL] {policy_name}/{task_name}: {err}")
         return False
 
-    # A subsampled draw (scripts/benchmarks/subsample_benchmark.py) is the SAME task run
-    # over fewer episodes, not a new one, so it keeps the task's name and its leaderboard
-    # row and is separated by --date instead. Naming it `Close-v1-smoke50` would have put
-    # it outside TASKS and therefore outside compare_to_leaderboard.py and
-    # category_mix_check.py, which are exactly the tools a small cell needs most.
-    benchmark_dir = benchmark_dir_override or resolve_benchmark_dir(task)
     eval_output_dir = cell_dir / "eval_output"
 
     eval_cmd = [

@@ -28,13 +28,16 @@ Probe the working tree, probe a baseline worktree, then diff the two:
     cd /tmp && PYTHONPATH=/tmp/base python <abs>/scripts/probe_policy_payload.py --json /tmp/base.json
     python scripts/probe_policy_payload.py --compare /tmp/base.json /tmp/now.json
 
-Two details in that recipe are load-bearing, and both were measured rather than reasoned about:
+Two details in that recipe are load-bearing:
 
-  * **Run the baseline arm from a neutral cwd.** `molmo_spaces` resolves off `sys.path[0]`
-    -- the cwd for `python -c`, the script's directory otherwise -- before PYTHONPATH, so
-    launching from the main checkout's root silently loads the main checkout and the arm is
-    not a baseline at all. The editable install's `_EditableFinder` sits *after* PathFinder on
-    sys.meta_path and is not the hazard; cwd is.
+  * **PYTHONPATH is what isolates the baseline arm.** Measured: setuptools *appends*
+    `_EditableFinder`, so sys.meta_path is `[..., PathFinder, _EditableFinder]` and the path
+    entries are consulted first. The editable install is therefore not the hazard. What can
+    still beat PYTHONPATH is `sys.path[0]` -- the cwd for `python -c` and `python -m`, the
+    script's own directory for `python some/script.py`. The `cd` above covers the first form;
+    in the recipe as written sys.path[0] is `<main>/scripts`, which holds no `molmo_spaces`,
+    so PYTHONPATH wins either way. Neither of these is a guarantee, which is why `--compare`
+    re-checks the loaded module file and VOIDs instead of passing.
   * **Point PYTHONPATH at the baseline but run the working tree's probe.** The instrument has
     to be held fixed while the code under test changes. An old revision's probe against an old
     revision's package compares two measurements, not two payloads.
@@ -317,9 +320,18 @@ def compare_arms(path_a: str, path_b: str) -> int:
       MOVED    both arms hashed, and the hashes differ -- the payload changed
       fixed    A errored, B hashed
       BROKE    A hashed, B errored
+      absent   only one arm probed the cell at all
 
-    MOVED and BROKE fail; `fixed` does not, because turning a crash into a payload is the
-    shape every deliberate improvement here has had.
+    MOVED and BROKE fail. `fixed` does not, because turning a crash into a payload is the
+    shape every deliberate improvement here has had. `absent` does not either -- it means the
+    two arms probed different matrices (a `--policy` restriction, a rig added between
+    revisions), so those cells were not compared and are reported as such rather than as a
+    payload that moved.
+
+    Exit status: 0 agree, 1 the payload changed, 2 VOID -- nothing was compared. The three
+    are distinct because a caller that cannot tell VOID from a regression will treat an
+    un-run check as a failure, or worse, the other way round. Same convention as
+    scripts/compare_harnesses.py.
     """
     a = json.load(open(path_a))
     b = json.load(open(path_b))
@@ -331,14 +343,18 @@ def compare_arms(path_a: str, path_b: str) -> int:
     # install's finder hard-codes the main checkout, so an unisolated arm looks like a PASS.
     if pa["molmo_spaces_file"] == pb["molmo_spaces_file"]:
         print("\nVOID: both arms loaded the same molmo_spaces; nothing was compared.")
-        return 1
+        return 2
 
-    moved, broke, fixed, same = [], [], [], []
+    ABSENT = "<absent>"
+    moved, broke, fixed, same, absent = [], [], [], [], []
     for policy in sorted(set(a["hashes"]) | set(b["hashes"])):
         ha, hb = a["hashes"].get(policy, {}), b["hashes"].get(policy, {})
         for rig in sorted(set(ha) | set(hb)):
-            va, vb = ha.get(rig, "<absent>"), hb.get(rig, "<absent>")
+            va, vb = ha.get(rig, ABSENT), hb.get(rig, ABSENT)
             cell = f"{policy}/{rig}"
+            if ABSENT in (va, vb):
+                absent.append((cell, "B" if vb == ABSENT else "A"))
+                continue
             ea, eb = va.startswith("ERROR"), vb.startswith("ERROR")
             if va == vb:
                 same.append(cell)
@@ -352,14 +368,18 @@ def compare_arms(path_a: str, path_b: str) -> int:
     aa, ab = a.get("actions", {}), b.get("actions", {})
     for policy in sorted(set(aa) | set(ab)):
         cell = f"{policy}/model_output_to_action"
-        va = aa.get(policy, {}).get("hash", "<absent>")
-        vb = ab.get(policy, {}).get("hash", "<absent>")
-        if va == vb:
+        va = aa.get(policy, {}).get("hash", ABSENT)
+        vb = ab.get(policy, {}).get("hash", ABSENT)
+        if ABSENT in (va, vb):
+            absent.append((cell, "B" if vb == ABSENT else "A"))
+        elif va == vb:
             same.append(cell)
         else:
             moved.append((cell, va, vb))
 
     print(f"\n{len(same)} cell(s) identical")
+    for cell, side in absent:
+        print(f"absent {cell}\n         only arm {'A' if side == 'B' else 'B'} probed it; not compared")
     for cell, was in fixed:
         print(f"fixed  {cell}\n         A: {was}")
     for cell, now in broke:
@@ -371,7 +391,12 @@ def compare_arms(path_a: str, path_b: str) -> int:
         print("\nFAIL: the payload changed. Either the change was intended -- say so in "
               "docs/eval_reproduction.md and re-baseline -- or it is a regression.")
         return 1
-    print("\nPASS: every shared cell sends byte-identical payloads.")
+    if not same:
+        print("\nVOID: no cell was probed by both arms.")
+        return 2
+    print(f"\nPASS: all {len(same)} shared cell(s) send byte-identical payloads.")
+    if absent:
+        print(f"      {len(absent)} cell(s) only one arm probed, so they were not compared.")
     return 0
 
 

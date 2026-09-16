@@ -195,6 +195,10 @@ def main() -> None:
     missing = []
     pooled = {}  # policy -> (successes, total)
     pooled_task_count = {}  # policy -> how many of the 7 Group B tasks actually contributed
+    # The metric is a per-ROW column, so the baseline cannot honestly carry one scalar unless
+    # every contributing row agreed on it. Collected rather than read off whichever row the
+    # loop happened to end on.
+    metrics_used: set[str] = set()
 
     for _, row in snapshot.iterrows():
         task, policy, metric = row["task"], row["policy"], row["metric"]
@@ -209,6 +213,7 @@ def main() -> None:
             continue
 
         overall = read_overall(results_csv)
+        metrics_used.add(str(metric))
         successes, total = successes_and_total(overall, metric)
         per_task_rows.append(
             verdict_row(task, policy, successes, total, row["success_rate"],
@@ -268,7 +273,12 @@ def main() -> None:
             print(f"  {policy}/{task}")
 
     all_rows = per_task_rows + aggregate_rows
-    if args.json:
+    if args.json and not all_rows:
+        # An empty baseline is worse than none: it would overwrite a real one and then diff
+        # clean against anything. Reached whenever every snapshot row was filtered out --
+        # a wrong --embodiment does it.
+        print(f"\nrefusing to write {args.json}: no cell had results to record.")
+    elif args.json:
         # Written so a later run can be diffed against this one rather than against the
         # leaderboard. The two are different questions: the leaderboard says whether we
         # reproduce a published number, this says whether we still get the number we got --
@@ -285,7 +295,7 @@ def main() -> None:
                 ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
             ).strip(),
             "leaderboard": str(args.leaderboard),
-            "metric": metric,
+            "metric": sorted(metrics_used)[0] if len(metrics_used) == 1 else sorted(metrics_used),
             "verdict_rule": VERDICT_RULE,
             "cells": all_rows,
         }
