@@ -4612,3 +4612,8 @@ the same `PYTHONPATH` isolates correctly, which is the recipe now in the docstri
 
 `--compare` refuses rather than passes when both arms name the same `molmo_spaces` file,
 since that is the one way this comparison can lie.
+
+`scripts/probe_payload_ab.sh [baseline-rev]` does the whole dance -- worktree, neutral cwd,
+both arms, compare, cleanup -- in one command, defaulting to `HEAD~1`. The reason the probe
+sat unrun for a session is that its recipe was four steps long and two of them failed
+silently; a wrapper is the difference between a check that exists and a check that gets run.
