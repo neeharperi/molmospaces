@@ -4446,3 +4446,27 @@ no per-tick ceiling, so it executes those steps as issued, and the rig cannot. A
 action traces a different path, so the two harnesses are running different trajectories
 whatever the scene does -- which is a second, independent reason the comparison has to be
 distributional.
+
+### The cross-harness answer, at the resolution the benchmark allows
+
+Five Close-v1 episodes, `pi05_droid_jointpos_polaris`, oracle metric:
+
+| comparison | agreement |
+|---|---|
+| native vs native (two runs, fresh server each) | **4 of 5** |
+| native vs droid's rig (`simulate.py --sim --benchmark`) | **4 of 5** |
+
+The one cross-harness disagreement (house 20, the drawer) is the rig succeeding where the
+native run failed. It is **indistinguishable from the harness's disagreement with itself**:
+the same count, on a benchmark whose exterior camera is redrawn per build.
+
+So the answer to "does calling a policy through the droid harness match running it natively"
+is: **no difference is detectable above the benchmark's own run-to-run variance**, with the
+environment half proven exactly (same house, same start pose, byte-identical wrist view) and
+two named reasons a sharper statement is not reachable — the unseeded exterior camera, and
+the rig's per-tick ceiling, which scaled 12% of ticks even at four times the rig's proven
+limit.
+
+`scripts/compare_harnesses.py` reports this as VOID rather than as a divergence, which is the
+verdict the evidence supports. Reaching a stronger one needs the upstream seed fix, not more
+episodes.
