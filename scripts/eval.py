@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from eval_common import POLICIES, TASKS, PolicySpec, TaskSpec, check_env_matches
+from eval_common import POLICIES, TASKS, PolicySpec, TaskSpec, check_env_matches, resolve_benchmark_dir
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -64,13 +64,6 @@ def check_server_reachable(policy: PolicySpec) -> str | None:
             f"Start it first -- see docs/eval_reproduction.md for the launch command."
         )
     return None
-
-
-def resolve_benchmark_dir(task: TaskSpec) -> Path:
-    assets_dir = os.environ.get("MLSPACES_ASSETS_DIR")
-    if not assets_dir:
-        raise RuntimeError("MLSPACES_ASSETS_DIR is not set.")
-    return Path(assets_dir) / "benchmarks" / task.path
 
 
 def run_cell(

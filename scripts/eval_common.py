@@ -192,6 +192,18 @@ REPRODUCTION_POLICIES = ("pi05_droid", "molmoact2_droid", "tiptop")
 GROUP_B_LEADERBOARD_TASK_NAME = "MolmoBot Combined"
 
 
+def resolve_benchmark_dir(task: TaskSpec) -> pathlib.Path:
+    """Where a task's benchmark JSON lives, under $MLSPACES_ASSETS_DIR.
+
+    Here rather than in eval.py because a second caller (scripts/cell_progress.py) needs it
+    and importing eval.py for it would drag in the whole matrix CLI.
+    """
+    assets_dir = os.environ.get("MLSPACES_ASSETS_DIR")
+    if not assets_dir:
+        raise RuntimeError("MLSPACES_ASSETS_DIR is not set.")
+    return pathlib.Path(assets_dir) / "benchmarks" / task.path
+
+
 def check_env_matches(task: TaskSpec) -> str | None:
     """Return an error message if the active conda env doesn't match the task's renderer."""
     expected_env = RENDERER_TO_CONDA_ENV[task.renderer]
