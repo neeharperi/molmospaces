@@ -3,7 +3,7 @@
 
     python scripts/compare_harnesses.py \
         runs/pi05_droid/Close-v1/xharness/eval_stdout.log \
-        ~/Robot/droid/data/simulate/2026-09-16T0130_ws-127-0-0-1-8000.json
+        ~/Workspace/droid/data/simulate/2026-09-16T0130_ws-127-0-0-1-8000.json
 
 Sibling of `scripts/check_cross_repo_cell.py`, which asks the same question of two *conda
 environments*. This one asks it of two *client stacks*: `eval_main.py` driving a policy
