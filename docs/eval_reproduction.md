@@ -4209,3 +4209,114 @@ An auto-gate is now armed to run the Open-v1 cell at rungs 10k/20k/30k as they l
 **frozen copy** of `gate_openpi_ckpt.sh` -- editing a script while bash is executing it makes
 bash resume at a stale byte offset, which earlier in this session silently re-ran two already
 completed cells.
+
+---
+
+# 2026-09-16 -- first cells on the 2x RTX PRO 5000 host, and four reasons there had been none
+
+The campaign's numbers were all produced on the 4x H100 NVL machine. This repository was
+repointed at the workstation the DROID rig is attached to on 2026-09-15 (`d8b7723`,
+`349b00c`), and `runs/` does not exist here -- so nothing had been reproduced on this host at
+all. Four things stopped a cell from starting, and none of them was visible in the code.
+
+## The editable installs pointed at paths that no longer exist
+
+`mlspaces-classic` and `mlspaces-filament` both carried
+
+```
+__editable___molmo_spaces_..._finder.py   MAPPING = {'molmo_spaces': '/home/nperi/Workspace/molmospaces/molmo_spaces'}
+_editable_impl_openpi_client.pth          /home/nperi/Workspace/molmospaces/third_party/openpi/packages/openpi-client/src
+```
+
+Both paths went away when the model repos stopped being submodules (`6b45506`) and this
+repository moved under `droid/third_party/`.
+
+**Why it hid.** `import molmo_spaces` *worked* from the repository root -- cwd resolved it
+without consulting the finder -- and failed inside `eval_main.py`, because Python run on a
+script path puts the script's own directory on `sys.path[0]` instead of cwd. So every
+interactive check passed and only the subprocess died, reporting `ModuleNotFoundError: No
+module named 'molmo_spaces'` from a file inside `molmo_spaces/`.
+
+`pip install -e . --no-deps --no-build-isolation` in both envs, and the `openpi_client` `.pth`
+rewritten to `droid/third_party/openpi/packages/openpi-client/src`.
+
+## Two version gates, both of which the pinned asset file answers
+
+`molmospaces_resources` was 0.0.2 against a checkout requiring `>= 0.0.3a2` (the licence gate,
+`63e6a87`). Installed 0.0.3a2.
+
+Then `_handle_version_mismatch` refused `robots/g1: installed=20260802, requested=20260815`.
+That one is what `MLSPACES_PINNED_ASSETS_FILE` exists for and it was simply not exported --
+`run_preflight.sh` and `run_full_matrix.sh` set it, and driving `eval.py` directly does not.
+
+With it exported, `eval_main.py`'s own `_assert_data_versions_match()` still refused: its
+`_EXPECTED_DATA_VERSIONS` (from the 0.2.9 upstream merge) wants g1 20260815, while
+`reference/pinned_assets_20260816.json` -- the record of what these benchmarks were built
+against -- pins 20260802. No DROID benchmark instantiates a g1, and the assertion already
+supports a list of accepted versions for exactly this case, which several scene and object
+entries use. g1 is now `["20260815", "20260802"]`.
+
+## The EGL mapping: measured wrongly, and the wrong answer was the plausible one
+
+`probe_egl_mapping.py` had two modes and trusted the wrong one by default. It inferred the
+mapping by resolving each EGL device to a DRM node, then a PCI address, then an nvidia-smi
+index, and measured by allocation only when that inference resolved *nothing*. On this host it
+resolves cleanly:
+
+```
+EGL 0 -> /dev/dri/card0 -> 01:00.0 -> GPU 0      "Mapping is IDENTITY"
+EGL 1 -> /dev/dri/card2 -> c1:00.0 -> GPU 1
+```
+
+Measured by allocation -- render, then ask `nvidia-smi` which GPU the process appears under --
+it is the other way round:
+
+```
+MUJOCO_EGL_DEVICE_ID=0 -> nvidia-smi GPU 1
+MUJOCO_EGL_DEVICE_ID=1 -> nvidia-smi GPU 0
+```
+
+Which vindicates the constant `run_full_matrix.sh` originally hardcoded, and means the
+"identity here, but only because it was measured" entry above is wrong for this host. The
+probe now measures by default and reports a disagreement with the inference loudly.
+
+Observed consequence before the fix, and the reason it matters: a full-coverage cell launched
+with `MUJOCO_EGL_DEVICE_ID=1` intending to render on the idle card put all 20 renderer
+contexts on **GPU 0**, beside the policy server -- 2.7 GB each, 40 GB of 48 in use -- while
+GPU 1 sat at 909 MiB. Nothing errored.
+
+### The cause is upstream of the mapping: glvnd enumerates every vendor
+
+`eglQueryDevicesEXT()` returns **5** devices on this host, not 2: the two cards plus Mesa
+entries, whose DRM nodes are `root:video` / `root:render` 0660 and which this user cannot
+open. MuJoCo indexes straight into that list, so
+
+- `MUJOCO_EGL_DEVICE_ID` stops meaning "which GPU", and which index is which card depends on
+  vendor load order -- so a mapping measured once stops being true;
+- a lane that lands on a Mesa entry fails with `libEGL warning: failed to open
+  /dev/dri/renderD129: Permission denied` and then `ImportError: Cannot initialize a EGL
+  device display ... PLATFORM_DEVICE`, which names neither the vendor nor the permission.
+
+`scripts/nvidia_gl_env.sh` now pins `__EGL_VENDOR_LIBRARY_FILENAMES` to the host's own
+`10_nvidia.json` when the driver is a full install, not only when the unpacked user-local
+prefix from `install_nvidia_gl.sh` is present. Pinned, the list is exactly the two cards.
+
+> The host driver is now 580.178.04 with a **full** userspace install -- `libEGL_nvidia.so.0`,
+> `10_nvidia.json` and `nvidia_icd.json` all in `/usr` -- so `~/nvidia-gl` does not exist and
+> is not needed. The compute-only workaround the script was written for no longer applies
+> here; both cases are handled and the one that applies is decided by what is on disk.
+
+## Timing, now that a cell runs
+
+Close-v1, `pi05_droid`, this host:
+
+| | episodes | workers | wall clock |
+|---|---|---|---|
+| probe | 6 | 3 | 57 s |
+| smoke draw | 50 | 10 | 147 s |
+| full coverage | 915 | 20 | ~40 min |
+
+So full coverage on bench-v1 is affordable here, and the plan to settle for a 50-episode cell
+was over-cautious. The 50-episode draw gave oracle **78.0%** [64.7, 87.2] against the
+leaderboard's 65.14% -- an interval that brackets it only at its lower edge, which is exactly
+the weak verdict a small cell supports.
