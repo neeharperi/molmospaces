@@ -4484,3 +4484,37 @@ limit.
 `scripts/compare_harnesses.py` reports this as VOID rather than as a divergence, which is the
 verdict the evidence supports. Reaching a stronger one needs the upstream seed fix, not more
 episodes.
+
+## 2026-09-16 -- the base->DROID fine-tune path, and where it stops on two 48 GB cards
+
+Phase 4 of the verification pass asked whether the fine-tuning code works. Two defects in
+this stack's own openpi commits had to be fixed before it could start at all, and both were
+invisible from the serving side:
+
+**`repo_id` was never set on any of the six RLDS configs.** `DataConfigFactory` declares it
+without a default, and tyro turns a field with no default into a *required CLI argument*, so
+`train.py pi05_droid_jointpos_from_base` refused to start with "the following arguments are
+required: --data.repo-id". Serving never noticed, because `serve_policy.py` looks a config up
+by name rather than through tyro. Set to `"droid"`, which is what upstream's own RLDS DROID
+configs set (`training/config.py:863`, `:893`).
+
+**`DeltaActions` and `AbsoluteActions` mutate `data["actions"]` in place.** An array from the
+RLDS loader is a read-only view over a TensorFlow tensor, so the first batch died with
+"output array is read-only". Both copy before writing now, which is right for a transform
+regardless of whether the input happens to permit mutation.
+
+With those fixed, the pipeline is verified end to end: the config builds, `tfds.builder`
+resolves the 100-episode sample through a `droid/1.0.1` symlink and reports
+`r2d2_faceblur` 1.0.0 with 100 train episodes, the loader reads all 31 shards, the transforms
+run, and `pi05_base`'s 11.6 GB of weights download and restore in 5.9 s.
+
+Two host-specific notes for anyone repeating this:
+
+* **`gsutil` has no credentials here**, and openpi's `maybe_download` shells out to it for a
+  single *file* (it uses fsspec for directories, which is why checkpoints work). So
+  `filter_dict_path` cannot be fetched, and the launcher grew `EXTRA_FLAGS` to turn it off --
+  which the 100-episode sample needs anyway, since the published
+  `droid_sample_ranges_v1_0_1.json` indexes the real 1.0.1 episodes and would filter it to
+  nothing.
+* **Host RAM, not VRAM, is the surprise.** The run settles around 100 GB RSS of 188. A
+  CPU-only attempt was OOM-killed by the kernel outright.
