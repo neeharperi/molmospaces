@@ -3,7 +3,6 @@
 # patch is detected and skipped, so this is safe to re-run after updating a checkout.
 #
 #   scripts/apply_third_party_patches.sh dreamzero    # 48GB-card single-GPU inference
-#   scripts/apply_third_party_patches.sh openpi        # base->DROID fine-tuning
 #   scripts/apply_third_party_patches.sh              # everything still carried here
 #
 # WINDING DOWN. The model checkouts are no longer submodules of this repository -- each is
@@ -12,6 +11,14 @@
 # than replayed after every checkout. Two are left here pending that migration; the rest
 # have gone:
 #
+#   openpi     landed as commits in the openpi checkout, and smaller than this patch was:
+#              the DualCheckpointManager --resume fix had no target (that class does not
+#              exist outside the fork the patch was cut against), the jointpos serving
+#              configs turned out to be registered by openpi itself in
+#              src/openpi/training/misc/polaris_config.py, and the host paths became CLI
+#              flags in scripts/train_openpi_droid.sh rather than dataclass defaults.
+#              What remained: the pbar.write loss-logging fix, the base-vs-DROID norm
+#              stats fix, and the two *_from_base configs.
 #   molmoact2  both hunks landed UPSTREAM (allenai/molmoact2), and further: the
 #              action_mode -> inference_action_mode rename, and torch, which upstream took
 #              to 2.11.0/cu128 rather than the 2.7.1 this patch asked for.
