@@ -4665,3 +4665,31 @@ category-coverage table, off a cell that is still running.
 > stretch -- 10.9/min down to 4.9/min and back -- which is a reminder that this host is
 > shared and a wall-clock estimate made on it is not repeatable. It was not what caused the
 > kill; 40 workers were.
+
+### The parity check, verified end to end over 8 episodes
+
+Against a live `scripts/sim_server.py` on the Close-v1 benchmark, all 8 episodes pass, and
+the translated quantities land at float32-wire residuals rather than anywhere interesting:
+
+| | range over 8 episodes |
+|---|---|
+| joints (untranslated -- the episode-identity check) | 0.00e+00 rad, every episode |
+| tool pose, base frame, position | 8.3e-09 to 4.3e-08 m |
+| tool pose, base frame, rotation | 2.7e-08 to 1.1e-07 |
+| gripper fraction | exact to 6 decimals, every episode |
+
+So `sim_server.py`'s world-to-base transform, its choice of the grasp site over the flange,
+its Euler convention and its gripper scale are all confirmed against references derived
+independently in the checking process. That is what the old joint-only assertion could not
+say, because it compared `arm.joint_pos[:7]` with `arm.joint_pos[:7]`.
+
+**The image behaviour reproduced exactly as recorded, which is worth more than a pass.** 15
+of 16 camera hashes agreed across the two processes and one did not -- episode 6's
+`exo_camera_1` -- with the wrist agreeing on that same episode. No pattern, no relation to the
+episode index. That is the unseeded-scene finding above, live: nothing image-level is
+assertable across processes, and this check is right to report rather than assert it.
+
+**And the teardown fix holds.** The run's host RAM peaked at 93.5 GB and plateaued rather
+than climbing per episode, so `release()` -- guarded closes plus dropping the sampler and a
+`gc.collect()` -- is releasing each scene. The unguarded `task.close()` it replaced would
+have held all eight.
