@@ -21,17 +21,26 @@ proven statically but never exercised end-to-end (PnP-NextTo-v2 costs 285 s/ep a
 
 Usage
 -----
-    python scripts/probe_policy_payload.py                      # working tree
-    PYTHONPATH=<head-worktree> python scripts/probe_policy_payload.py --json out.json
+Probe the working tree, probe a baseline worktree, then diff the two:
 
-Compare the two JSON outputs. Identical hashes across every (policy, rig) cell means the
-payloads are byte-identical.
+    git worktree add --detach /tmp/base <baseline-rev>
+    python scripts/probe_policy_payload.py --json /tmp/now.json
+    cd /tmp && PYTHONPATH=/tmp/base python <abs>/scripts/probe_policy_payload.py --json /tmp/base.json
+    python scripts/probe_policy_payload.py --compare /tmp/base.json /tmp/now.json
 
-IMPORTANT -- baseline isolation is asserted, not assumed. `molmo_spaces` is an editable install
-whose finder hard-codes the main checkout, so a `git worktree` alone does NOT isolate it
-(`docs/eval_reproduction.md:3443`). This script prints a `_provenance` block naming the loaded
-module file and whether `resolve_camera_keys` exists; a HEAD arm that reports the working-tree
-path or a present `resolve_camera_keys` is not a baseline and its IDENTICAL verdict is false.
+Two details in that recipe are load-bearing, and both were measured rather than reasoned about:
+
+  * **Run the baseline arm from a neutral cwd.** `molmo_spaces` resolves off `sys.path[0]`
+    -- the cwd for `python -c`, the script's directory otherwise -- before PYTHONPATH, so
+    launching from the main checkout's root silently loads the main checkout and the arm is
+    not a baseline at all. The editable install's `_EditableFinder` sits *after* PathFinder on
+    sys.meta_path and is not the hazard; cwd is.
+  * **Point PYTHONPATH at the baseline but run the working tree's probe.** The instrument has
+    to be held fixed while the code under test changes. An old revision's probe against an old
+    revision's package compares two measurements, not two payloads.
+
+`--compare` checks the isolation for you: two arms reporting the same `molmo_spaces_file` are
+VOID rather than PASS, which is the one way this comparison can lie.
 """
 
 from __future__ import annotations
@@ -296,11 +305,90 @@ def summarize(payload) -> dict:
     return repr(payload)
 
 
+def compare_arms(path_a: str, path_b: str) -> int:
+    """Diff two --json outputs and turn the pair into a verdict.
+
+    Needs nothing but the two files -- no molmo_spaces, no GPU -- so it is the half of this
+    probe that can run in CI while the two arms are produced wherever they have to be.
+
+    Verdicts per (policy, rig) cell:
+
+      same     identical hash, or identical error text
+      MOVED    both arms hashed, and the hashes differ -- the payload changed
+      fixed    A errored, B hashed
+      BROKE    A hashed, B errored
+
+    MOVED and BROKE fail; `fixed` does not, because turning a crash into a payload is the
+    shape every deliberate improvement here has had.
+    """
+    a = json.load(open(path_a))
+    b = json.load(open(path_b))
+
+    pa, pb = a["provenance"], b["provenance"]
+    print(f"A  {path_a}\n     {pa['molmo_spaces_file']}")
+    print(f"B  {path_b}\n     {pb['molmo_spaces_file']}")
+    # The one way this comparison lies is both arms importing the same tree -- the editable
+    # install's finder hard-codes the main checkout, so an unisolated arm looks like a PASS.
+    if pa["molmo_spaces_file"] == pb["molmo_spaces_file"]:
+        print("\nVOID: both arms loaded the same molmo_spaces; nothing was compared.")
+        return 1
+
+    moved, broke, fixed, same = [], [], [], []
+    for policy in sorted(set(a["hashes"]) | set(b["hashes"])):
+        ha, hb = a["hashes"].get(policy, {}), b["hashes"].get(policy, {})
+        for rig in sorted(set(ha) | set(hb)):
+            va, vb = ha.get(rig, "<absent>"), hb.get(rig, "<absent>")
+            cell = f"{policy}/{rig}"
+            ea, eb = va.startswith("ERROR"), vb.startswith("ERROR")
+            if va == vb:
+                same.append(cell)
+            elif ea and not eb:
+                fixed.append((cell, va))
+            elif eb and not ea:
+                broke.append((cell, vb))
+            else:
+                moved.append((cell, va, vb))
+
+    aa, ab = a.get("actions", {}), b.get("actions", {})
+    for policy in sorted(set(aa) | set(ab)):
+        cell = f"{policy}/model_output_to_action"
+        va = aa.get(policy, {}).get("hash", "<absent>")
+        vb = ab.get(policy, {}).get("hash", "<absent>")
+        if va == vb:
+            same.append(cell)
+        else:
+            moved.append((cell, va, vb))
+
+    print(f"\n{len(same)} cell(s) identical")
+    for cell, was in fixed:
+        print(f"fixed  {cell}\n         A: {was}")
+    for cell, now in broke:
+        print(f"BROKE  {cell}\n         B: {now}")
+    for cell, va, vb in moved:
+        print(f"MOVED  {cell}\n         A: {va[:32]}\n         B: {vb[:32]}")
+
+    if moved or broke:
+        print("\nFAIL: the payload changed. Either the change was intended -- say so in "
+              "docs/eval_reproduction.md and re-baseline -- or it is a regression.")
+        return 1
+    print("\nPASS: every shared cell sends byte-identical payloads.")
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--json", help="write the full result (hashes + provenance) here")
     ap.add_argument("--policy", action="append", help="restrict to these policies (repeatable)")
+    ap.add_argument(
+        "--compare",
+        nargs=2,
+        metavar=("A.json", "B.json"),
+        help="diff two --json outputs instead of probing; needs no molmo_spaces",
+    )
     args = ap.parse_args()
+
+    if args.compare:
+        return compare_arms(*args.compare)
 
     import molmo_spaces
     from molmo_spaces.configs import policy_configs_baselines as pcb

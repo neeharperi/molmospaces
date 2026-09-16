@@ -4550,3 +4550,65 @@ otherwise.
 > Xorg, gnome-shell and Firefox, about 900 MB. The launcher's default does not account for
 > the desktop living on a training card, and the second attempt above was asking for 46.5 GB
 > of a card that had 48.0 free.
+
+## The payload probe, finally run: every wrapper sends byte-identical payloads
+
+`scripts/probe_policy_payload.py` existed unrun. It was named as a gate and skipped, which
+made every claim about this session's 13 commits an argument from the diff rather than a
+measurement. Run now, in two arms, with a `--compare` mode added so the pair produces a
+verdict instead of two tables to eyeball.
+
+| A (baseline) | B | shared cells | verdict |
+|---|---|---|---|
+| `349b00c` — this session's starting point | `41bf2df` — HEAD | 20 | **PASS**, all identical |
+| `e6d3ba8` — before `camera_names` moved onto `BasePolicyConfig` | HEAD | 18 | **PASS**, plus 2 cells `fixed` |
+
+Twenty cells is 5 policies x 3 rigs plus 5 `model_output_to_action` hashes. The first row is
+the regression verdict this session needed: nothing we changed moved a single byte of what
+any wrapper sends a policy server, or what any wrapper turns a model output into.
+
+The second row says something sharper than "no change". The `camera_names` refactor took the
+field off each policy config and put it on `BasePolicyConfig`, and simultaneously changed
+`PiPolicyConfig.camera_names` from the literal `['exo_camera_1', 'wrist_camera']` to `None`
+(auto-detect). **Both defaults resolve to the same two keys on every rig we probe**, so the
+refactor was payload-neutral -- and its only behavioural effect was to turn two hard crashes
+into working cells:
+
+```
+fixed  dreamzero/randcam_override
+         A: ERROR: ValueError: "DreamZeroPolicyConfig" object has no field "camera_names"
+fixed  tiptop/randcam_override
+         A: ERROR: ValueError: "TiptopPolicyConfig" object has no field "camera_names"
+```
+
+Pick-v2-RandCam passes `--camera_names` to *every* policy, so before the refactor that task
+could not run DreamZero or TiPToP at all. `--compare` treats ERROR -> hash as `fixed` rather
+than as a failure, because that is the shape every deliberate improvement here has had.
+
+**The probe is not vacuous, and its own output shows it.** The five policies produce five
+different action hashes; the three rigs produce three different payload hashes; and the
+gripper convention divergence is visible at exactly the threshold:
+
+| | 0.49999 | 0.50000 | 0.50001 |
+|---|---|---|---|
+| pi05 / pi0 / molmoact2 (`>`) | 0.0 | **0.0** | 255.0 |
+| dreamzero (`>=`) | 0.0 | **255.0** | 255.0 |
+| tiptop (continuous) | 127.497 | 127.5 | 127.503 |
+
+### Correction: the isolation trap is cwd, not the editable finder
+
+The probe's own docstring said a `git worktree` cannot isolate a baseline arm because the
+editable install's finder hard-codes the main checkout. Measured, that is not the mechanism:
+
+```
+sys.meta_path tail: ['FrozenImporter', 'PathFinder', '_EditableFinder']
+```
+
+setuptools *appends* `_EditableFinder`, so `PathFinder` -- and therefore `sys.path`, and
+therefore `PYTHONPATH` -- is consulted first. What actually breaks a baseline arm is
+`sys.path[0]`: the cwd for `python -c`, and it beats `PYTHONPATH`. Launching the baseline
+from this checkout's root loads *this* checkout and reports a false PASS. From a neutral cwd
+the same `PYTHONPATH` isolates correctly, which is the recipe now in the docstring.
+
+`--compare` refuses rather than passes when both arms name the same `molmo_spaces` file,
+since that is the one way this comparison can lie.
