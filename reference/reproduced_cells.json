@@ -1,0 +1,28 @@
+{
+  "recorded": "2026-09-16T08:56:42.933651+00:00",
+  "host": "sn4622130428",
+  "molmospaces_git_sha": "dd50a73c1b93b969976bb724d3053323a8b76c2c",
+  "leaderboard": "reference/leaderboard_snapshot.csv",
+  "metric": "oracle",
+  "verdict_rule": "overlap-or-better",
+  "cells": [
+    {
+      "task": "Close-v1",
+      "policy": "pi05_droid",
+      "ours_pct": 66.1,
+      "n": 915,
+      "leaderboard_pct": 65.14,
+      "date": "full20260916",
+      "verdict": "PASS"
+    },
+    {
+      "task": "Close-v1",
+      "policy": "pi0_droid",
+      "ours_pct": 53.9,
+      "n": 915,
+      "leaderboard_pct": 53.11,
+      "date": "full20260916",
+      "verdict": "PASS"
+    }
+  ]
+}

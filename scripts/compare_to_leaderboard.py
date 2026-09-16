@@ -29,6 +29,7 @@ while only some policies have landed.
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import sys
 from pathlib import Path
@@ -45,6 +46,8 @@ from eval_common import (
     read_overall,
     wilson_interval,
 )
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
 
 METRIC_TO_COLUMNS = {
     "at-end": ("successes", "total"),
@@ -157,6 +160,13 @@ def main() -> None:
     )
     parser.add_argument("--runs-dir", type=Path, default=Path("runs"))
     parser.add_argument(
+        "--json",
+        type=Path,
+        default=None,
+        help="also write the rows here, with the git sha and host, as the baseline a later "
+        "run diffs against (see reference/reproduced_cells.json)",
+    )
+    parser.add_argument(
         "--embodiment", default="DROID", help="Filter the leaderboard snapshot to this embodiment."
     )
     gate = parser.add_mutually_exclusive_group()
@@ -258,6 +268,31 @@ def main() -> None:
             print(f"  {policy}/{task}")
 
     all_rows = per_task_rows + aggregate_rows
+    if args.json:
+        # Written so a later run can be diffed against this one rather than against the
+        # leaderboard. The two are different questions: the leaderboard says whether we
+        # reproduce a published number, this says whether we still get the number we got --
+        # and after a refactor the second is the one that catches a regression, because it
+        # has no sampling interval standing between the change and the verdict.
+        import json as _json
+        import platform
+        import subprocess
+
+        payload = {
+            "recorded": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "host": platform.node(),
+            "molmospaces_git_sha": subprocess.check_output(
+                ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, text=True
+            ).strip(),
+            "leaderboard": str(args.leaderboard),
+            "metric": metric,
+            "verdict_rule": VERDICT_RULE,
+            "cells": all_rows,
+        }
+        args.json.parent.mkdir(parents=True, exist_ok=True)
+        args.json.write_text(_json.dumps(payload, indent=2) + "\n")
+        print(f"\nwrote {args.json}")
+
     failures = [r for r in all_rows if r["verdict"] == "FAIL"]
     if failures:
         print(f"\n{len(failures)}/{len(all_rows)} evaluated cells FAILED.")

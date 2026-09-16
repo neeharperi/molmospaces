@@ -4320,3 +4320,46 @@ So full coverage on bench-v1 is affordable here, and the plan to settle for a 50
 was over-cautious. The 50-episode draw gave oracle **78.0%** [64.7, 87.2] against the
 leaderboard's 65.14% -- an interval that brackets it only at its lower edge, which is exactly
 the weak verdict a small cell supports.
+
+## Two full-coverage cells on this host, both PASS
+
+| policy | task | ours | n | leaderboard | verdict | wall clock |
+|---|---|---|---|---|---|---|
+| `pi05_droid` | Close-v1 | **66.12%** [62.99, 69.11] | 915 | 65.14% | **PASS** | 42 min, 20 workers |
+| `pi0_droid` | Close-v1 | **53.93%** | 915 | 53.11% | **PASS** | 44 min, 10 workers |
+
+Full coverage, not a draw: every category appears at the count
+`benchmark_metadata.json` records (stand 313, drawer 298, chestofdrawers 210, cabinet 44,
+desk 42, door 3, refrigerator 2, coffeetable 2, safe 1). Recorded in
+`reference/reproduced_cells.json`, which is what a later run should be diffed against --
+the leaderboard answers "do we reproduce the published number", that file answers "do we
+still get the number we got", and after a refactor the second is the one with no sampling
+interval standing between the change and the verdict.
+
+`compare_to_leaderboard.py` also gained a `from` column, after a 50-episode draw tagged
+`smoke50` lexically outranked `full20260916` and became "latest". The coverage guard printed
+INCOMPLETE rather than a wrong PASS, so nothing was mis-reported -- but the table not naming
+its source is what made that confusing instead of obvious. The draws are now under the
+leading-underscore convention this repository already has for diagnostic cells.
+
+### openpi does not replay a closed-loop rollout, and `--num_workers 1` is not enough
+
+`scripts/serve_openpi.sh`'s `DETERMINISTIC=1` makes a *single* inference bit-reproducible,
+and the entry above at line 3453 already records that a 500-step closed loop still diverges
+(6 of 30 episodes on Pick-v1.5). Measured again here, deliberately, because a cross-harness
+comparison depends on it:
+
+| control arrangement | 5-episode Close-v1, two runs |
+|---|---|
+| `DETERMINISTIC=1`, `--num_workers 5`, one server | **1 of 5 flipped** |
+| `DETERMINISTIC=1`, `--num_workers 1`, one server | **2 of 5 flipped** |
+
+One worker did not help, and the reason is upstream of the worker count:
+`openpi/policies/policy.py:65` seeds `self._rng = jax.random.key(0)` once per **process** and
+splits it per inference (`:75`). Two runs against the same live server therefore start from
+different sampler states -- the second one continues the first one's sequence. Replaying
+needs a **freshly started server**, not just a single client.
+
+`scripts/compare_harnesses.py` refuses to issue a verdict until the control agrees with
+itself, which is why this surfaced as VOID rather than as a false divergence blamed on the
+rig.
