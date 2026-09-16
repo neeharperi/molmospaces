@@ -420,7 +420,7 @@ setup_openpi() {
     refuse_if_prefix_busy "$MLSPACES_MODELS_DIR/openpi/.venv" openpi || return 1
     # NOT at parity with polaris-openpi, and deliberately so -- see docs/env_parity.md. That env
     # carries upstream Physical-Intelligence/openpi with the pi05_droid_jointpos_polaris config;
-    # this one carries the omarrayyann fork with pi05_droid_jointpos, which is the config the
+    # openpi registers the jointpos configs itself, in src/openpi/training/misc/polaris_config.py,
     # MolmoSpaces leaderboard entry was produced with. Adopting the other would not be a version
     # difference, it would be a different checkpoint, and the reproduction would fail by
     # construction. Built by uv, not conda, because that is what the fork supports.
@@ -437,8 +437,8 @@ check_env() {  # $1 = env name
 import jax, openpi.training.config as c
 print(f"  jax {jax.__version__} devices={jax.devices()}")
 names = {x.name for x in c._CONFIGS}
-assert "pi05_droid_jointpos" in names, "pi05_droid_jointpos not registered (wrong openpi fork?)"
-print("  openpi config pi05_droid_jointpos OK")
+assert "pi05_droid_jointpos_polaris" in names, "pi05_droid_jointpos_polaris not registered"
+print("  openpi config pi05_droid_jointpos_polaris OK")
 EOF
         [ $rc -eq 0 ] && echo "  $name OK (intentional divergence)" || echo "  $name FAILED"
         return $rc

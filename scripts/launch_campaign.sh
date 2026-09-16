@@ -107,8 +107,8 @@ start_servers() {
     # cutamp/ directory with no __init__.py, which shadows the installed editable package as a
     # PEP 420 namespace package and fails startup with a misleading "cuTAMP version mismatch".
     _srv tiptop      "env CUDA_VISIBLE_DEVICES=2 $ENVS/mlspaces-tiptop/bin/python -m tiptop.tiptop_websocket_server --port 18765"
-    _srv openpi_pi05 "env GPU=3 PORT=8080 CONFIG=pi05_droid_jointpos bash scripts/serve_openpi.sh"
-    _srv openpi_pi0  "env GPU=3 PORT=8081 CONFIG=pi0_droid_jointpos  bash scripts/serve_openpi.sh"
+    _srv openpi_pi05 "env GPU=3 PORT=8080 CONFIG=pi05_droid_jointpos_polaris bash scripts/serve_openpi.sh"
+    _srv openpi_pi0  "env GPU=3 PORT=8081 CONFIG=pi0_droid_jointpos_polaris  bash scripts/serve_openpi.sh"
     echo
     echo "Servers starting. Wait for all 6 ports before launching lanes:"
     echo "  bash scripts/launch_campaign.sh wait-servers"

@@ -37,8 +37,8 @@ sys.exit(0 if '$TASK' in TASKS else 1)
 " || { echo "unknown TASK '$TASK' -- see eval_common.TASKS" >&2; exit 1; }
 
 case "$POLICY" in
-  pi05_droid) CFG=pi05_droid_jointpos_from_base; SERVE_CFG=pi05_droid_jointpos; PORT=8080 ;;
-  pi0_droid)  CFG=pi0_droid_jointpos_from_base;  SERVE_CFG=pi0_droid_jointpos;  PORT=8081 ;;
+  pi05_droid) CFG=pi05_droid_jointpos_from_base; SERVE_CFG=pi05_droid_jointpos_polaris; PORT=8080 ;;
+  pi0_droid)  CFG=pi0_droid_jointpos_from_base;  SERVE_CFG=pi0_droid_jointpos_polaris;  PORT=8081 ;;
   *) echo "POLICY must be pi05_droid or pi0_droid" >&2; exit 1 ;;
 esac
 
@@ -59,7 +59,7 @@ if [ -d "$CKPT_SRC/assets" ]; then
 else
   # Older rungs may not carry assets; fall back to the reference norm stats, which is what the
   # *_from_base configs train against anyway (base ships joint-VELOCITY stats, 1.63x larger).
-  ln -sfn "$MLSPACES_MODELS_DIR/openpi/checkpoints/$SERVE_CFG/assets" "$LINK_DIR/assets"
+  ln -sfn "$MLSPACES_MODELS_DIR/openpi/checkpoints/${SERVE_CFG%_polaris}/assets" "$LINK_DIR/assets"
 fi
 
 echo "=== gating $POLICY $EXP step $STEP on $TASK ==="

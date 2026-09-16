@@ -40,8 +40,10 @@ class Pi0PolicyConfig(PiPolicyConfig):
     remote_config: dict | None = dict(host="localhost", port=8081)
     # chunk_size is inherited (8) and that is deliberate, but it is worth stating why rather
     # than leaving it to look like a copy-paste. The two checkpoints do NOT share an action
-    # horizon: openpi registers pi0_droid_jointpos with action_horizon=10 and
-    # pi05_droid_jointpos with 15 (src/openpi/training/config.py:1043 and :684). chunk_size is
+    # horizon: openpi registers pi0_droid_jointpos_polaris with action_horizon=10 and
+    # pi05_droid_jointpos_polaris with 15, both in
+    # src/openpi/training/misc/polaris_config.py, and both declare it in policy_metadata.
+    # chunk_size is
     # how many of each returned chunk PI_Policy executes before re-querying, so it must stay
     # <= the horizon -- executing a chunk longer than the model returns is exactly the failure
     # that silently cost MolmoAct2 5 of every 15 actions (see docs/eval_reproduction.md).
