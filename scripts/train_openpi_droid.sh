@@ -102,6 +102,13 @@ fi
 # for the ladder gate's inference server so a run could be evaluated mid-flight. On a 48 GB
 # card 0.75 is ~35.8 GB, which does not even cover the optimizer state, so that design is not
 # available here: train, then gate, rather than both at once.
+# One number for both cards, which is worth knowing before raising it: on this host GPU 1
+# also carries Xorg, gnome-shell and a browser -- about 900 MB -- so 0.95 asks for 46.5 GB of
+# a card that has 48.0 free. Measured 2026-09-16: a bs2 run at 0.95 still died inside the
+# first train_step, needing 8.5 GB beyond budget, and a bs8 run at 0.85 needed 8.9 GB -- a 4x
+# batch cut moving the shortfall by 5%, which says the failing allocation is the optimizer
+# state rather than activations. See docs/eval_reproduction.md: no batch size makes this fit
+# two 48 GB cards.
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${MEMFRAC:-0.95}"
 export CUDA_VISIBLE_DEVICES="$GPUS"
 # droid_rlds_dataset.py already calls tf.config.set_visible_devices([], "GPU"), but that

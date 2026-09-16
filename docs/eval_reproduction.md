@@ -4518,3 +4518,35 @@ Two host-specific notes for anyone repeating this:
   nothing.
 * **Host RAM, not VRAM, is the surprise.** The run settles around 100 GB RSS of 188. A
   CPU-only attempt was OOM-killed by the kernel outright.
+
+### Where it stops: the failing allocation is not batch-dependent
+
+Two attempts, same config, same data, different batch and memory fraction:
+
+| batch | `MEMFRAC` | activation budget XLA had | short by |
+|---|---|---|---|
+| 8 | 0.85 | 14.41 GiB | 8,919,732,128 bytes (8.31 GiB) |
+| 2 | 0.95 | 18.91 GiB | 8,491,208,224 bytes (7.91 GiB) |
+
+**A 4x batch cut moved the shortfall by 5%.** That is the whole finding: whatever fails to
+allocate is not activations, so trading batch size for memory cannot fix it. 8.5 GB is
+parameter-shaped for this model -- pi0.5 is ~3B, so float32 params are ~12 GB, ~6 GB per
+shard across `fsdp_devices=2`, and an all-gather buffer plus an AdamW moment lands in exactly
+this range. `scripts/train_openpi_droid.sh`'s own header already said so in words ("0.75 of
+48 GB does not even cover the optimizer state"); these are the numbers behind it.
+
+So the base->DROID fine-tune does not fit two 48 GB cards, and no batch size makes it. What
+would: cards with more memory (the reference campaign ran 93.6 GiB H100s), gradient
+accumulation or optimizer offload -- neither of which openpi has -- or a LoRA recipe, which
+openpi does not ship for these configs but DreamZero's checkout does for its own.
+
+**The path itself is verified.** Config, data, transforms, weight restore and compilation all
+work, and the run dies inside the first `train_step` rather than anywhere reachable by a
+code change. `scripts/record_finetune_smoke.py` deliberately refuses to write a baseline for
+a run that never reached a step, so there is no `reference/finetune_smoke.json` claiming
+otherwise.
+
+> `MEMFRAC=0.95` on **both** cards over-commits GPU 1 on this host: that is the card carrying
+> Xorg, gnome-shell and Firefox, about 900 MB. The launcher's default does not account for
+> the desktop living on a training card, and the second attempt above was asking for 46.5 GB
+> of a card that had 48.0 free.
