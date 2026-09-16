@@ -4321,12 +4321,17 @@ was over-cautious. The 50-episode draw gave oracle **78.0%** [64.7, 87.2] agains
 leaderboard's 65.14% -- an interval that brackets it only at its lower edge, which is exactly
 the weak verdict a small cell supports.
 
-## Two full-coverage cells on this host, both PASS
+## Three full-coverage cells on this host, all three PASS
 
 | policy | task | ours | n | leaderboard | verdict | wall clock |
 |---|---|---|---|---|---|---|
 | `pi05_droid` | Close-v1 | **66.12%** [62.99, 69.11] | 915 | 65.14% | **PASS** | 42 min, 20 workers |
+| `molmoact2_droid` | Close-v1 | **72.90%** [69.92, 75.68] | 915 | 71.26% | **PASS** | 78 min, 12 workers |
 | `pi0_droid` | Close-v1 | **53.93%** | 915 | 53.11% | **PASS** | 44 min, 10 workers |
+
+Every Close-v1 entry the leaderboard has for these three, reproduced within 1.7 pp at the
+leaderboard's own n. MolmoAct2 is the slowest of the three because its inference is
+170-390 ms against openpi's ~70, not because of anything about the cell.
 
 Full coverage, not a draw: every category appears at the count
 `benchmark_metadata.json` records (stand 313, drawer 298, chestofdrawers 210, cabinet 44,
