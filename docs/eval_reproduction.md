@@ -4395,3 +4395,54 @@ sensor names to DROID camera roles, 0..255 Robotiq control to a 0..1 closed frac
 to uint16 millimetres), which is not shared and is where a plausible-but-different world
 would come from. Outcomes then have to be compared as distributions over a common episode
 set, not episode by episode.
+
+### Root cause: a benchmark episode carries no seed, so the exterior camera is redrawn per build
+
+This is the finding the cross-harness work turned up, and it is upstream of every
+reproducibility question above.
+
+`EpisodeSpec.seed` is **`null`** in `molmospaces-bench-v1`'s Close-v1 benchmark. Build the
+same episode index **twice in one process** and hash what comes back:
+
+```
+build 1  arm=c0bfb6e9ae53  wrist_camera=a5158ddbb66d5b62  exo_camera_1=7f9e5e5644ae03df
+build 2  arm=c0bfb6e9ae53  wrist_camera=a5158ddbb66d5b62  exo_camera_1=ae9281f6302e41de
+```
+
+The arm's start pose is bit-identical and so is the wrist view -- it is robot-mounted, so it
+follows the arm and nothing else. The **exocentric view differs**, because whatever places it
+is not seeded from the episode, and the episode has no seed to offer.
+
+Consequences, in order of how much they matter:
+
+1. **No two runs of an episode see the same exterior image**, in any harness, including this
+   one against itself. Every policy that consumes the exterior camera -- which is all of
+   them except TiPToP, which uses the wrist -- is therefore evaluated on a scene that varies
+   run to run. That is the mechanism behind the closed-loop flips measured above, and it
+   means a cell's variance is wider than its binomial interval implies.
+2. **Per-episode outcome identity can never be a cross-harness criterion**, and neither can
+   byte-level image parity on the exterior view. `scripts/check_sim_server_parity.py`
+   therefore asserts the house, the arm's start pose and the wrist view, and *reports* the
+   exterior view with the reason.
+3. It is fixable upstream: seed the placement from the episode index or from a
+   benchmark-level seed, and write the seed into the spec. Not attempted here -- it would
+   change every number on the leaderboard, which is a decision rather than a fix.
+
+What the parity check does establish, and it is the environment half of the Phase-3 question:
+for a given index, droid's `sim_server.py --benchmark` and this harness build **the same
+house, the same start pose and the same wrist view**, so the translation layer that is not
+shared between them -- world frame to robot base, sensor names to DROID camera roles,
+Robotiq 0..255 to a 0..1 closed fraction, metres to uint16 millimetres -- is right.
+
+### The rig's per-tick ceiling bites hard on the jointpos checkpoint
+
+Running arm C -- the same episodes through droid's rollout loop -- at `--max-joint-step 0.2`,
+which is four times what the rig is proven at, the status band still reports `scale` between
+**0.48 and 0.89** on most ticks. `pi05_droid_jointpos_polaris` commands absolute joint
+targets further than 0.2 rad from the current pose, repeatedly.
+
+That is a real deployment fact rather than a comparison artifact: the native harness applies
+no per-tick ceiling, so it executes those steps as issued, and the rig cannot. A clamped
+action traces a different path, so the two harnesses are running different trajectories
+whatever the scene does -- which is a second, independent reason the comparison has to be
+distributional.

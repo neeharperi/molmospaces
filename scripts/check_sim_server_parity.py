@@ -26,6 +26,14 @@ plausible scene which is not this one.
 The reference episode is built in this process rather than read from a recorded run, so the
 comparison needs no prior cell -- and it is built from the same benchmark directory the
 server was given, which the server reports back so a mismatch is caught rather than compared.
+
+**The exterior view is reported, not asserted, and that is a fact about the benchmark rather
+than a weakness here.** An `EpisodeSpec` carries `seed: null`, so whatever places the
+exocentric camera is not seeded from the episode -- building the same index twice *in one
+process* yields a different `exo_camera_1` image and an identical `wrist_camera` image. So no
+two runs of an episode agree on the exterior view, in any harness, including this one against
+itself. The wrist camera is robot-mounted and follows the arm, which is why it is exact and
+is the thing worth asserting.
 """
 
 from __future__ import annotations
@@ -70,7 +78,10 @@ def reference_episode(benchmark_dir: pathlib.Path, index: int):
 def reference_state(task, obs):
     """Joints, gripper and the camera images, in the units MolmoSpaces itself uses."""
     robot_view = task._env.robots[0].robot_view
-    arm = np.asarray(robot_view.get_move_group("arm").get_joint_positions(), dtype=np.float64)
+    # `joint_pos`, the attribute sim_server.py reads, not a getter -- FrankaFR3ArmGroup has
+    # no get_joint_positions, and reading a different field would compare two numbers rather
+    # than one number twice.
+    arm = np.asarray(robot_view.get_move_group("arm").joint_pos, dtype=np.float64)[:7]
     images = {}
     for sensor, role in CAMERA_ROLES.items():
         entry = obs.get(sensor)
@@ -116,7 +127,11 @@ def main() -> int:
             print(f"  {'the arm starts in the same place':<44} {'ok' if ok else 'FAILED'}  max |d| {delta:.2e} rad")
             failures += not ok
 
-            for role, reference in images.items():
+            # Asserted for the wrist, reported for the rest. See the module docstring: the
+            # exocentric camera is redrawn per build because the episode carries no seed, so
+            # requiring it to match would make this check fail always and mean nothing.
+            for role, reference in sorted(images.items()):
+                exact = role == "wrist"
                 entry = link._frames.get(link_serial(link, role))
                 if entry is None:
                     print(f"  {role + ': frame arrived':<44} FAILED  nothing under that role")
@@ -129,8 +144,17 @@ def main() -> int:
                 same_shape = got.shape == reference.shape
                 identical = same_shape and bool(np.array_equal(got, reference))
                 detail = f"{digest(got)} vs {digest(reference)}" if same_shape else f"{got.shape} vs {reference.shape}"
-                print(f"  {role + ': the same pixels':<44} {'ok' if identical else 'FAILED'}  {detail}")
-                failures += not identical
+                if exact:
+                    print(f"  {role + ': the same pixels':<44} {'ok' if identical else 'FAILED'}  {detail}")
+                    failures += not identical
+                else:
+                    verdict = "same" if identical else "differs (unseeded; see docstring)"
+                    print(f"  {role + ': reported, not asserted':<44} {verdict:<8} {detail}")
+                # A shape mismatch is a real fault whichever camera it is: it means the two
+                # sides disagree about what the episode asked for, not about a random draw.
+                if not same_shape:
+                    print(f"  {role + ': the same frame size':<44} FAILED  {got.shape} vs {reference.shape}")
+                    failures += 1
 
             task.close() if hasattr(task, "close") else None
     finally:
