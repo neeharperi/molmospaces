@@ -18,6 +18,7 @@
 #    real working set. This is also why pi0 and pi0.5 can share one card at all.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
 PORT="${PORT:-8080}"
 GPU="${GPU:-0}"
 CONFIG="${CONFIG:-pi05_droid_jointpos}"
@@ -44,12 +45,12 @@ if [ "${DETERMINISTIC:-0}" = "1" ]; then
   export XLA_FLAGS="${XLA_FLAGS:-} --xla_gpu_autotune_level=0 --xla_gpu_deterministic_ops=true"
 fi
 
-[ -d "third_party/openpi/$CKPT_DIR" ] || {
-  echo "checkpoint not found: third_party/openpi/$CKPT_DIR" >&2
-  echo "fetch it with: gsutil -m cp -r gs://openpi-assets/checkpoints/$CONFIG third_party/openpi/checkpoints/" >&2
+[ -d "$MLSPACES_MODELS_DIR/openpi/$CKPT_DIR" ] || {
+  echo "checkpoint not found: $MLSPACES_MODELS_DIR/openpi/$CKPT_DIR" >&2
+  echo "fetch it with: gsutil -m cp -r gs://openpi-assets/checkpoints/$CONFIG $MLSPACES_MODELS_DIR/openpi/checkpoints/" >&2
   exit 1
 }
 
-cd third_party/openpi
+cd "$MLSPACES_MODELS_DIR/openpi"
 CUDA_VISIBLE_DEVICES="$GPU" uv run scripts/serve_policy.py --port="$PORT" policy:checkpoint \
   --policy.config="$CONFIG" --policy.dir="$CKPT_DIR/"

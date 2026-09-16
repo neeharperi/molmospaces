@@ -25,7 +25,8 @@
 # it. `uv sync --group rlds` into a live serving venv can also swap .so files under a
 # running server process.
 set -euo pipefail
-cd "$(dirname "$0")/../third_party/openpi"
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
+cd "$MLSPACES_MODELS_DIR/openpi"
 
 MODEL="${MODEL:-pi05}"
 SMOKE="${SMOKE:-0}"

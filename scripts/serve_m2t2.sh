@@ -5,13 +5,14 @@
 # perception step (ConnectionRefusedError) and silently returns success=False, not a crash --
 # see docs/eval_reproduction.md's TiPToP section for how this was found.
 #
-# M2T2 is vendored at third_party/m2t2 (pinned SHA in docs/env_parity.md) and served from this
+# M2T2 is a plain clone at $MLSPACES_MODELS_DIR/m2t2 (pinned SHA in docs/env_parity.md) and served from this
 # repo's own `mlspaces-m2t2` env, a mirror of robot-prompt-opt's `polaris-m2t2`. Both are built
 # by scripts/setup_envs.sh mlspaces-m2t2, which also git-lfs-pulls the weights.
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
 PORT="${PORT:-8123}"
 GPU="${GPU:-0}"
-M2T2_DIR="${M2T2_DIR:-$PWD/third_party/m2t2}"
+M2T2_DIR="${M2T2_DIR:-$MLSPACES_MODELS_DIR/m2t2}"
 CKPT="${CKPT:-$M2T2_DIR/weights/m2t2.pth}"
 
 [ -f "$CKPT" ] || {

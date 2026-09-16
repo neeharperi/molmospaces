@@ -59,6 +59,46 @@ ABS_PATH_OF_TOP_LEVEL_MOLMO_SPACES_DIR = Path(__file__).resolve().parent.parent
 _DATA_CACHE_DEFAULT = Path("~/.cache/molmo-spaces-resources").expanduser()
 DATA_CACHE_DIR = Path(os.environ.get("MLSPACES_CACHE_DIR", _DATA_CACHE_DEFAULT))
 
+# Where the policy checkouts live -- openpi, molmoact2, tiptop, dreamzero.
+#
+# They are NOT vendored here. Each is an independent checkout with its own remote, its
+# own upstream and its own environment, sitting beside this one; the default below is
+# therefore the parent of this repository, which is exactly where they are. Nothing
+# needs setting in the normal layout.
+#
+# This used to be a literal `third_party/<name>` relative to this repo, back when they
+# were submodules. A submodule pins a SHA, and the real checkouts move past it -- the
+# openpi gitlink named one fork while the checkout beside us is another, dozens of
+# commits further on. A directory that is resolved, rather than a SHA that is recorded,
+# cannot drift like that.
+#
+# The bash half of this is scripts/lib/models_dir.sh. The two compute their defaults
+# independently and must agree; overriding MLSPACES_MODELS_DIR moves both.
+MODELS_DIR = (
+    Path(
+        os.environ.get(
+            "MLSPACES_MODELS_DIR", ABS_PATH_OF_TOP_LEVEL_MOLMO_SPACES_DIR.parent
+        )
+    )
+    .expanduser()
+    .resolve()
+)
+
+#: The checkouts something in this repository actually drives. Not a requirement that all
+#: of them exist -- a machine that only evaluates pi0.5 needs only openpi -- but if NONE
+#: of them do, MODELS_DIR is wrong and every downstream failure would be a confusing
+#: "checkpoint not found" several layers away from the cause.
+_KNOWN_MODEL_CHECKOUTS = ("openpi", "molmoact2", "tiptop", "dreamzero")
+if not any((MODELS_DIR / name).is_dir() for name in _KNOWN_MODEL_CHECKOUTS):
+    raise RuntimeError(
+        f"MLSPACES_MODELS_DIR resolved to {MODELS_DIR}, which holds none of "
+        f"{', '.join(_KNOWN_MODEL_CHECKOUTS)}.\n"
+        "That directory is where this repository expects to find the policy checkouts it "
+        "serves and evaluates.\n"
+        "Set MLSPACES_MODELS_DIR to the directory that contains them, or leave it unset "
+        f"if they sit beside this checkout (the default, {ABS_PATH_OF_TOP_LEVEL_MOLMO_SPACES_DIR.parent})."
+    )
+
 # Each molmospaces installation needs its own assets directory.
 # The default ASSETS_DIR will be in the user's cache directory,
 # but uses a unique hash of the installation path to avoid conflicts.

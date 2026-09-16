@@ -7,7 +7,7 @@
 # and reproducible, matching serve_cosmos.sh's GPU=/PORT= convention.
 #
 # Runs from this repo's own mlspaces-molmoact2 env (torch 2.8.0+cu129), NOT from
-# third_party/molmoact2's uv venv: the submodule's pyproject pins torch 2.5.1+cu121, and the
+# the molmoact2 checkout's uv venv: the submodule's pyproject pins torch 2.5.1+cu121, and the
 # env recipe in scripts/setup_envs.sh is what the campaign's results are pinned to.
 #
 # The vendored host_server_droid.py needs scripts/molmoact2_patches/0001-*.patch applied --
@@ -16,10 +16,13 @@
 # call raises. apply_third_party_patches.sh is idempotent; re-run it after any submodule bump.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-PORT="${PORT:-8000}"
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
+# 8102, not 8000: droid's own openpi server holds :8000 and its molmoact2 server holds
+# :8101 (this repo lives in droid/third_party/). See scripts/eval_common.py.
+PORT="${PORT:-8102}"
 GPU="${GPU:-0}"
 
 CUDA_VISIBLE_DEVICES="$GPU" HF_TOKEN="${HF_TOKEN:-}" \
   "${MOLMOACT2_PYTHON:-${MLSPACES_ENVS:-$HOME/anaconda3/envs}/mlspaces-molmoact2/bin/python}" \
-  third_party/molmoact2/examples/droid/host_server_droid.py \
+  "$MLSPACES_MODELS_DIR/molmoact2/examples/droid/host_server_droid.py" \
   --host 0.0.0.0 --port "$PORT" "$@"

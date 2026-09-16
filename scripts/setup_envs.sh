@@ -48,6 +48,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO="$PWD"
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
 
 CONDA="${CONDA:-$HOME/anaconda3/bin/conda}"
 ENVS_DIR="$($CONDA info --base)/envs"
@@ -56,9 +57,9 @@ PY_VER=3.11
 # --- pinned upstreams -------------------------------------------------------------------
 # These SHAs are the ones robot-prompt-opt's envs were built from (recorded 2026-08-19).
 # Bumping one is an env change: re-run the matching --check and note it in docs/env_parity.md.
-MOLMOACT2_SHA="5aac8f8a1180d79757ce500f819a02217079811c"   # third_party/molmoact2 submodule
-DREAMZERO_SHA="ab790c198fbce33503358efbbd4187ce9a89adf3"   # third_party/dreamzero submodule
-TIPTOP_SHA="d8f5afdaa94a7432220c3042f9f80be5ab45aae8"      # third_party/tiptop submodule (v0.3.0)
+MOLMOACT2_SHA="5aac8f8a1180d79757ce500f819a02217079811c"   # the molmoact2 checkout
+DREAMZERO_SHA="ab790c198fbce33503358efbbd4187ce9a89adf3"   # the dreamzero checkout
+TIPTOP_SHA="d8f5afdaa94a7432220c3042f9f80be5ab45aae8"      # the tiptop checkout (v0.3.0)
 CUROBO_SHA="b5fad1df2a3ac4d3e33e369918b7d62d0e59ebd1"
 CUTAMP_SHA="e206ab817599406abd709e8ba19f445889bd641c"      # == tag v0.0.6
 M2T2_SHA="401d3f65ba4cecadebd8c7113aa347c1a051b684"
@@ -80,14 +81,26 @@ export HF_HUB_CACHE="${HF_HUB_CACHE:-$HOME/.cache/huggingface/hub}"
 # GPU architecture. cuRobo, cuTAMP and M2T2's pointnet2_ops all build CUDA kernels from
 # source and none of them targets the local arch by default.
 #
-# THIS HOST IS HOPPER, NOT BLACKWELL. The campaign this script was written for ran on 2x RTX
-# PRO 5000 Blackwell (sm_120); this machine is 4x H100 NVL (sm_90). Everything else in the
-# recipe -- the cu129/cu130 wheel indices, the flash-attn build, the exact pins -- is
-# arch-agnostic and stays as it was, because the pins are what makes results comparable
-# across the two runs. Only the compile target and the corresponding assertions change.
-export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-9.0}"
+# THIS HOST IS BLACKWELL: 2x RTX PRO 5000 Blackwell, 48935 MiB each, sm_120 -- the same
+# machine the campaign this script was written for ran on. An earlier revision retargeted
+# these two values to sm_90 for a 4x H100 NVL host; that is what they have been changed back
+# from. Everything else in the recipe -- the cu129/cu130 wheel indices, the flash-attn build,
+# the exact pins -- is arch-agnostic and unchanged, because the pins are what makes results
+# comparable across hosts. Only the compile target and the assertions track the arch.
+#
+# Two consequences of being back on 48 GB cards, both of which the servers read rather than
+# this script: DreamZero needs its offload and DiT-split defaults ON (see serve_dreamzero.sh
+# -- stock, it peaks ~47.5 GiB against ~46.2 usable and OOMs on the third inference of an
+# episode), and openpi cannot train and serve a gate concurrently.
+#
+# And the interconnect is NOT what the openpi fine-tune comments assume. `nvidia-smi topo -m`
+# reports SYS between GPU0 and GPU1 -- PCIe plus the cross-NUMA SMP link, with affinities on
+# NUMA 3 and NUMA 1. There is no NVLink on this host, so the "fsdp_devices=2 confined to one
+# NVLink pair" reasoning inverts here: FSDP all-gathers every parameter over precisely the
+# cross-NUMA link that reasoning was avoiding.
+export TORCH_CUDA_ARCH_LIST="${TORCH_CUDA_ARCH_LIST:-12.0}"
 # The arch string the check_env() assertions below require torch to have been built with.
-export EXPECTED_SM="${EXPECTED_SM:-sm_90}"
+export EXPECTED_SM="${EXPECTED_SM:-sm_120}"
 
 ALL_TARGETS=(mlspaces-classic mlspaces-filament mlspaces-molmoact2 mlspaces-m2t2
              mlspaces-tiptop mlspaces-dreamzero openpi)
@@ -180,7 +193,13 @@ sync_clone() {  # $1 = url, $2 = destination, $3 = sha
 }
 
 # Submodules are already pinned by the parent repo; just assert we are where we think we are.
-assert_submodule_sha() {  # $1 = path, $2 = sha
+assert_checkout_sha() {  # $1 = path, $2 = sha
+    # These are independent checkouts beside this repository, not submodules -- so there is
+    # no gitlink recording a SHA and nothing that would pin one. That is deliberate (a
+    # gitlink goes stale the moment the real checkout moves on), and it is exactly why this
+    # is a warning rather than a hard failure: the env was BUILT against $2, and a checkout
+    # that has moved past it may be fine or may not, which only a human can judge.
+    [ -d "$1" ] || { echo "  WARNING: $1 does not exist" >&2; return 0; }
     local got; got="$(git -C "$1" rev-parse HEAD)"
     if [ "$got" != "$2" ]; then
         echo "  WARNING: $1 is at $got, docs/env_parity.md records $2" >&2
@@ -199,7 +218,7 @@ _harness_common() {  # $1 = env name
     # conflicts with molmospaces' own numpy>=2 requirement -- a plain install silently
     # downgrades numpy and breaks ml_dtypes and opencv. Its other deps (msgpack, pillow,
     # websockets, dm-tree) are already satisfied by the base install, so --no-deps is safe.
-    "$PIP" install --no-deps -e third_party/openpi/packages/openpi-client
+    "$PIP" install --no-deps -e "$MLSPACES_MODELS_DIR/openpi/packages/openpi-client"
     "$PIP" install -U "numpy>=2,<3"
     # json-numpy is needed on the HARNESS side too, not just in mlspaces-molmoact2. MolmoAct2
     # is the one policy that speaks HTTP rather than the msgpack websocket, and
@@ -253,7 +272,7 @@ setup_molmoact2() {
     refuse_if_busy mlspaces-molmoact2 || return 1
     ensure_env mlspaces-molmoact2
     local PIP; PIP="$(pip_ mlspaces-molmoact2)"
-    assert_submodule_sha "$REPO/third_party/molmoact2" "$MOLMOACT2_SHA"
+    assert_checkout_sha "$MLSPACES_MODELS_DIR/molmoact2" "$MOLMOACT2_SHA"
 
     "$PIP" install "setuptools<81" wheel
     # Upstream's pyproject pins torch 2.5.1 from the cu121 index, and cu121 has no sm_120, so
@@ -284,7 +303,7 @@ setup_m2t2() {
     refuse_if_busy mlspaces-m2t2 || return 1
     ensure_env mlspaces-m2t2 3.10
     local PIP; PIP="$(pip_ mlspaces-m2t2)"
-    sync_clone "$M2T2_REPO" "$REPO/third_party/m2t2" "$M2T2_SHA"
+    sync_clone "$M2T2_REPO" "$MLSPACES_MODELS_DIR/m2t2" "$M2T2_SHA"
 
     "$PIP" install "setuptools<81" wheel
     "$PIP" install --index-url "$TORCH_CU129" "torch==2.8.0" "torchvision==0.23.0"
@@ -295,19 +314,19 @@ setup_m2t2() {
     # installing it here the clone below silently leaves 133-byte pointer files. Neither is a
     # pip package, so neither appears in the parity diff.
     "$CONDA" install -n mlspaces-m2t2 -c nvidia -c conda-forge cuda-toolkit=12.9 git-lfs -y
-    "$PIP" install -r "$REPO/third_party/m2t2/requirements.txt"
+    "$PIP" install -r "$MLSPACES_MODELS_DIR/m2t2/requirements.txt"
     local CUDAENV; mapfile -t CUDAENV < <(cuda_env "$ENVS_DIR/mlspaces-m2t2")
-    env "${CUDAENV[@]}" "$PIP" install --no-build-isolation "$REPO/third_party/m2t2/pointnet2_ops"
+    env "${CUDAENV[@]}" "$PIP" install --no-build-isolation "$MLSPACES_MODELS_DIR/m2t2/pointnet2_ops"
     # m2t2/ ships no __init__.py, so find_packages() returns nothing and `pip install .` builds
     # an empty wheel. Upstream never noticed -- their server is always launched from the repo
     # root, where the directory is importable anyway. Put it on the path explicitly instead.
-    "$(py mlspaces-m2t2)" - "$REPO/third_party/m2t2" <<'EOF'
+    "$(py mlspaces-m2t2)" - "$MLSPACES_MODELS_DIR/m2t2" <<'EOF'
 import pathlib, site, sys
 pathlib.Path(site.getsitepackages()[0], "m2t2_repo.pth").write_text(sys.argv[1] + "\n")
 EOF
     # The weights are git-lfs objects. A plain clone leaves ~130-byte pointer files, which
     # surface much later as an opaque "invalid load key, 'v'" from torch.load inside the server.
-    local W="$REPO/third_party/m2t2/weights"
+    local W="$MLSPACES_MODELS_DIR/m2t2/weights"
     if [ ! -f "$W/m2t2.pth" ] || [ "$(stat -c%s "$W/m2t2.pth")" -lt 1000000 ]; then
         echo "  fetching M2T2 weights"
         [ -d "$W/.git" ] || git clone --quiet https://huggingface.co/wentao-yuan/m2t2 "$W"
@@ -329,8 +348,8 @@ setup_tiptop() {
     refuse_if_busy mlspaces-tiptop || return 1
     ensure_env mlspaces-tiptop 3.12
     local PIP; PIP="$(pip_ mlspaces-tiptop)"
-    local TT="$REPO/third_party/tiptop"
-    assert_submodule_sha "$TT" "$TIPTOP_SHA"
+    local TT="$MLSPACES_MODELS_DIR/tiptop"
+    assert_checkout_sha "$TT" "$TIPTOP_SHA"
 
     "$PIP" install "setuptools<81" wheel ninja
     "$CONDA" install -n mlspaces-tiptop -c nvidia cuda-toolkit=12.9 -y
@@ -373,11 +392,11 @@ setup_dreamzero() {
     refuse_if_busy mlspaces-dreamzero || return 1
     ensure_env mlspaces-dreamzero
     local PIP; PIP="$(pip_ mlspaces-dreamzero)"
-    assert_submodule_sha "$REPO/third_party/dreamzero" "$DREAMZERO_SHA"
+    assert_checkout_sha "$MLSPACES_MODELS_DIR/dreamzero" "$DREAMZERO_SHA"
 
     export PIP_CONSTRAINT="$REPO/scripts/constraints/common.txt"
     "$PIP" install "setuptools<81" wheel
-    "$PIP" install -e third_party/dreamzero --extra-index-url "$TORCH_CU129"
+    "$PIP" install -e "$MLSPACES_MODELS_DIR/dreamzero" --extra-index-url "$TORCH_CU129"
     # wan2_1_attention.py falls back Transformer Engine -> FA2, and TE is GB200-only, so
     # flash-attn is required rather than optional. The prebuilt wheel avoids a long source build.
     "$PIP" install "$FLASH_ATTN_WHL"
@@ -398,21 +417,21 @@ setup_openpi() {
     # venv and the reproduction matrix drives it for days, so guard this the same way the conda
     # envs are guarded -- resyncing under a live server is how a multi-day campaign turns into a
     # confusing mid-run failure.
-    refuse_if_prefix_busy "$REPO/third_party/openpi/.venv" openpi || return 1
+    refuse_if_prefix_busy "$MLSPACES_MODELS_DIR/openpi/.venv" openpi || return 1
     # NOT at parity with polaris-openpi, and deliberately so -- see docs/env_parity.md. That env
     # carries upstream Physical-Intelligence/openpi with the pi05_droid_jointpos_polaris config;
     # this one carries the omarrayyann fork with pi05_droid_jointpos, which is the config the
     # MolmoSpaces leaderboard entry was produced with. Adopting the other would not be a version
     # difference, it would be a different checkpoint, and the reproduction would fail by
     # construction. Built by uv, not conda, because that is what the fork supports.
-    ( cd "$REPO/third_party/openpi" && uv sync )
+    ( cd "$MLSPACES_MODELS_DIR/openpi" && uv sync )
 }
 
 # ---------------------------------------------------------------- verification
 check_env() {  # $1 = env name
     local name="$1" PY rc=0
     if [ "$name" = "openpi" ]; then
-        PY="$REPO/third_party/openpi/.venv/bin/python"
+        PY="$MLSPACES_MODELS_DIR/openpi/.venv/bin/python"
         [ -x "$PY" ] || { echo "  MISSING: third_party/openpi/.venv (run: uv sync there)"; return 1; }
         "$PY" - <<'EOF' || rc=1
 import jax, openpi.training.config as c
@@ -498,7 +517,7 @@ sys.exit(0 if ok else 1)
 EOF
         ;;
       mlspaces-m2t2)
-        M2T2_DIR="$REPO/third_party/m2t2" "$PY" - <<'EOF' || rc=1
+        M2T2_DIR="$MLSPACES_MODELS_DIR/m2t2" "$PY" - <<'EOF' || rc=1
 import os, sys, torch
 print(f"  torch {torch.__version__} avail={torch.cuda.is_available()}")
 ok = True

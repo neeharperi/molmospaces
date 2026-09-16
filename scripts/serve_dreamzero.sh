@@ -6,13 +6,14 @@
 # docs/eval_reproduction.md's DreamZero section for the measured footprint and GPU assignment.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
 PORT="${PORT:-5000}"
 GPUS="${GPUS:-1,0}"  # order matters: index 0 (primary, full resident weights) gets the listed
                       # GPU that has the most headroom free at launch time.
 # 0, not 12: the split exists only to fit a 48 GB card and costs a documented ~20% in
 # throughput. At 95 GB the model is resident on one GPU.
 DIT_SPLIT="${DIT_SPLIT:-0}"
-MODEL="${MODEL:-$PWD/third_party/dreamzero/checkpoints/DreamZero-DROID}"
+MODEL="${MODEL:-$MLSPACES_MODELS_DIR/dreamzero/checkpoints/DreamZero-DROID}"
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
 # deepspeed is unused at inference but transformers imports it, and it hard-errors unless nvcc
@@ -43,5 +44,5 @@ export DREAMZERO_DISABLE_DREAM_VIDEO="${DREAMZERO_DISABLE_DREAM_VIDEO:-1}"
 CUDA_VISIBLE_DEVICES="$GPUS" \
   "${DREAMZERO_PYTHON:-${MLSPACES_ENVS:-$HOME/anaconda3/envs}/mlspaces-dreamzero/bin/python}" -m torch.distributed.run \
   --standalone --nproc_per_node=1 \
-  third_party/dreamzero/socket_test_optimized_AR.py \
+  "$MLSPACES_MODELS_DIR/dreamzero/socket_test_optimized_AR.py" \
   --port "$PORT" --enable-dit-cache --model-path "$MODEL"

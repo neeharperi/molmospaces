@@ -20,6 +20,7 @@
 # latest_results_csv() takes the latest date dir.
 set -euo pipefail
 cd "$(dirname "$0")/.."
+source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
 
 POLICY="${POLICY:?set POLICY=pi05_droid or pi0_droid}"
 STEP="${STEP:?set STEP=<checkpoint step>}"
@@ -43,7 +44,7 @@ esac
 
 CKPT_SRC="/data/neehar/openpi_runs/checkpoints/$CFG/$EXP/$STEP"
 TAG="${EXP}_${STEP}"
-LINK_DIR="third_party/openpi/checkpoints/$TAG"
+LINK_DIR="$MLSPACES_MODELS_DIR/openpi/checkpoints/$TAG"
 DATE_TAG="_gate_${TAG}"
 
 [ -d "$CKPT_SRC/params" ] || { echo "no checkpoint at $CKPT_SRC/params" >&2; exit 1; }
@@ -58,7 +59,7 @@ if [ -d "$CKPT_SRC/assets" ]; then
 else
   # Older rungs may not carry assets; fall back to the reference norm stats, which is what the
   # *_from_base configs train against anyway (base ships joint-VELOCITY stats, 1.63x larger).
-  ln -sfn "$PWD/third_party/openpi/checkpoints/$SERVE_CFG/assets" "$LINK_DIR/assets"
+  ln -sfn "$MLSPACES_MODELS_DIR/openpi/checkpoints/$SERVE_CFG/assets" "$LINK_DIR/assets"
 fi
 
 echo "=== gating $POLICY $EXP step $STEP on $TASK ==="
@@ -106,7 +107,7 @@ export MLSPACES_FORCE_INSTALL=False
 export MLSPACES_PINNED_ASSETS_FILE="$PWD/reference/pinned_assets_20260816.json"
 
 EVAL_ARGS=(--policy "$POLICY" --task "$TASK" --date "$DATE_TAG" --num_workers "$NUM_WORKERS"
-           --checkpoint_path "third_party/openpi/checkpoints/$TAG" --force)
+           --checkpoint_path "$MLSPACES_MODELS_DIR/openpi/checkpoints/$TAG" --force)
 # MAX_EPISODES is for a quick look only. It selects whole HOUSES, so it under-covers categories
 # and can oversample; never read a capped rung as a leaderboard-comparable number.
 [ -n "${MAX_EPISODES:-}" ] && EVAL_ARGS+=(--max_episodes "$MAX_EPISODES")

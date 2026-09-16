@@ -44,6 +44,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO))
+from molmo_spaces.molmo_spaces_constants import MODELS_DIR  # noqa: E402
 # Overridable so this runs on a machine where the sibling checkout lives elsewhere.
 PEER_REPO = Path(os.environ.get("ROBOT_PROMPT_OPT", Path.home() / "Workspace" / "robot-prompt-opt"))
 CONDA_ENVS = Path(os.environ.get("CONDA_ENVS_DIR", Path.home() / "anaconda3" / "envs"))
@@ -96,7 +98,7 @@ ENVS: dict[str, EnvSpec] = {
     # pi0.5. A different fork AND a different checkpoint, not a version difference -- the one
     # intentional divergence in the campaign. See docs/env_parity.md.
     "openpi": EnvSpec(
-        peer="polaris-openpi", interpreter=REPO / "third_party/openpi/.venv/bin/python"
+        peer="polaris-openpi", interpreter=MODELS_DIR / "openpi/.venv/bin/python"
     ),
     # The five mirrored policy servers.
     "mlspaces-molmoact2": EnvSpec(peer="polaris-molmoact2"),

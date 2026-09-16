@@ -10,7 +10,12 @@ of it.
 from __future__ import annotations
 
 import os
+import pathlib
+import sys
 from dataclasses import dataclass, field
+
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
+from molmo_spaces.molmo_spaces_constants import MODELS_DIR  # noqa: E402
 
 
 @dataclass(frozen=True)
@@ -136,13 +141,13 @@ _assert_task_table_integrity()
 POLICIES: dict[str, PolicySpec] = {
     "pi05_droid": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:PiPolicyEvalConfig",
-        checkpoint_path="third_party/openpi/checkpoints/pi05_droid_jointpos",
+        checkpoint_path=str(MODELS_DIR / "openpi/checkpoints/pi05_droid_jointpos"),
         host="localhost",
         port=8080,
     ),
     "pi0_droid": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:Pi0PolicyEvalConfig",
-        checkpoint_path="third_party/openpi/checkpoints/pi0_droid_jointpos",
+        checkpoint_path=str(MODELS_DIR / "openpi/checkpoints/pi0_droid_jointpos"),
         host="localhost",
         port=8081,
     ),
@@ -150,7 +155,12 @@ POLICIES: dict[str, PolicySpec] = {
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:MolmoAct2PolicyEvalConfig",
         checkpoint_path="allenai/MolmoAct2-DROID",
         host="localhost",
-        port=8000,
+        # 8102, not upstream's 8000. droid's OWN openpi server (this repo sits inside
+        # droid/third_party/) serves pi0.5 to the rig on :8000, and its molmoact2 server
+        # takes :8101 -- so 8000 would collide outright and 8101 would stop the rig's
+        # server and this harness's from running at the same time. Same reasoning as
+        # tiptop's 18765 below.
+        port=8102,
     ),
     "tiptop": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:TiptopEvalConfig",
@@ -165,7 +175,7 @@ POLICIES: dict[str, PolicySpec] = {
     ),
     "dreamzero": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:DreamZeroPolicyEvalConfig",
-        checkpoint_path="third_party/dreamzero/checkpoints/DreamZero-DROID",
+        checkpoint_path=str(MODELS_DIR / "dreamzero/checkpoints/DreamZero-DROID"),
         host="localhost",
         # must track DreamZeroPolicyConfig.remote_config, or eval.py probes the wrong
         # port during fan-out and hard-fails a lane that is actually healthy.

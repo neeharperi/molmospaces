@@ -1,6 +1,7 @@
 import os
 
 from molmo_spaces.configs.policy_configs import BasePolicyConfig
+from molmo_spaces.molmo_spaces_constants import MODELS_DIR
 from molmo_spaces.policy.base_policy import PolicyFactory
 from molmo_spaces.utils.function_utils import make_lenient
 
@@ -35,7 +36,7 @@ class Pi0PolicyConfig(PiPolicyConfig):
     for remote_config.port, so the distinction has to live in the config.
     """
 
-    checkpoint_path: str = "third_party/openpi/checkpoints/pi0_droid_jointpos"
+    checkpoint_path: str = str(MODELS_DIR / "openpi/checkpoints/pi0_droid_jointpos")
     remote_config: dict | None = dict(host="localhost", port=8081)
     # chunk_size is inherited (8) and that is deliberate, but it is worth stating why rather
     # than leaving it to look like a copy-paste. The two checkpoints do NOT share an action
@@ -50,7 +51,9 @@ class Pi0PolicyConfig(PiPolicyConfig):
 
 class MolmoAct2PolicyConfig(BasePolicyConfig):
     checkpoint_path: str = "allenai/MolmoAct2-DROID"
-    remote_config: dict | None = dict(host="localhost", port=8000)
+    # 8102, not 8000: droid's own openpi server holds :8000 and its molmoact2 server
+    # holds :8101. See the note in scripts/eval_common.py's POLICIES table.
+    remote_config: dict | None = dict(host="localhost", port=8102)
     grasping_type: str = "binary"
     grasping_threshold: float = 0.5
     # `num_steps` is the flow-matching *integration* step count sent to the server (a

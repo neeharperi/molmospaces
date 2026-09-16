@@ -5,7 +5,7 @@
 
 Two problems, both from the checkpoint being packaged on someone else's filesystem.
 
-1. The eval harness expects the checkpoint at third_party/dreamzero/checkpoints/DreamZero-DROID
+1. The eval harness expects the checkpoint at $MLSPACES_MODELS_DIR/dreamzero/checkpoints/DreamZero-DROID
    (scripts/eval_common.py's POLICIES table). HF puts it in the shared hub cache. Symlink,
    don't copy -- it is ~43 GB and the weights are not part of an environment.
 
@@ -29,8 +29,10 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
+from molmo_spaces.molmo_spaces_constants import MODELS_DIR  # noqa: E402
 HUB = Path.home() / ".cache/huggingface/hub"
-DEST = REPO_ROOT / "third_party/dreamzero/checkpoints/DreamZero-DROID"
+DEST = MODELS_DIR / "dreamzero/checkpoints/DreamZero-DROID"
 
 
 def snapshot(repo_id: str) -> Path | None:
