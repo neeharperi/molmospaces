@@ -43,7 +43,7 @@ if [ -d "$NVIDIA_GL_PREFIX/usr/lib/x86_64-linux-gnu" ]; then
     export LD_LIBRARY_PATH="$NVIDIA_GL_PREFIX/usr/lib/x86_64-linux-gnu${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     export __EGL_VENDOR_LIBRARY_FILENAMES="$NVIDIA_GL_PREFIX/usr/share/glvnd/egl_vendor.d/10_nvidia.json"
     export VK_ICD_FILENAMES="$NVIDIA_GL_PREFIX/usr/share/vulkan/icd.d/nvidia_icd.json"
-    export MUJOCO_GL="${MUJOCO_GL:-egl}"
+    NVIDIA_GL_FOUND=yes
 elif [ -f "$SYSTEM_EGL_VENDOR" ]; then
     # The host has a full driver install, so there is nothing to unpack -- but the vendor
     # still has to be PINNED, and that is not optional.
@@ -62,9 +62,19 @@ elif [ -f "$SYSTEM_EGL_VENDOR" ]; then
     # see scripts/probe_egl_mapping.py, which measures it).
     export __EGL_VENDOR_LIBRARY_FILENAMES="$SYSTEM_EGL_VENDOR"
     [ -f "$SYSTEM_VK_ICD" ] && export VK_ICD_FILENAMES="$SYSTEM_VK_ICD"
-    export MUJOCO_GL="${MUJOCO_GL:-egl}"
-    export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
+    NVIDIA_GL_FOUND=yes
 else
     echo "warning: no NVIDIA GL userspace at $NVIDIA_GL_PREFIX and none in /usr;" >&2
     echo "         run scripts/install_nvidia_gl.sh (no root required)" >&2
 fi
+
+# Set once, for whichever branch found a vendor. These used to be set inside the branches,
+# and PYOPENGL_PLATFORM only inside the full-install one -- so the two supported host shapes
+# handed the renderer different environments, and on the unpacked-prefix host anything going
+# through PyOpenGL (scripts/probe_egl_mapping.py, which is what decides the lane mapping)
+# picked its platform by guesswork while MuJoCo itself was told egl.
+if [ "${NVIDIA_GL_FOUND:-no}" = "yes" ]; then
+    export MUJOCO_GL="${MUJOCO_GL:-egl}"
+    export PYOPENGL_PLATFORM="${PYOPENGL_PLATFORM:-egl}"
+fi
+unset NVIDIA_GL_FOUND
