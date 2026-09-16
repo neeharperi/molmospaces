@@ -434,7 +434,7 @@ was declared but never actually wired into the validation loop.
      confirmed `sm_120` present after the bump.
   Both edits live in the submodule's working tree, so they are captured as a patch at
   `scripts/molmoact2_patches/0001-blackwell-and-live-api-fixes.patch` and re-applied with
-  `scripts/apply_third_party_patches.sh molmoact2` -- otherwise a fresh clone or submodule
+  nothing -- the rename landed upstream in allenai/molmoact2, so a fresh clone or
   update silently reverts them and the server breaks again.
 - **Handshake test: PASS.** Once the π0.5 server was freed (Close-v1 completed) and the
   earlier stale crashed-server process was killed, the server started cleanly
@@ -661,7 +661,7 @@ already built against it), the `GEAR-Dreams/DreamZero-DROID` checkpoint already 
 (43GB), and a tested patch
 (`scripts/dreamzero_patches/0001-single-gpu-48gb-inference.patch`, copied into this repo
 verbatim and applied to `third_party/dreamzero` via
-`scripts/apply_third_party_patches.sh dreamzero`)
+now commits in the dreamzero checkout, not a patch replayed from here)
 enabling single-process inference split across 2 GPUs instead of PyTorch-distributed's
 `--nproc_per_node=2`, which that project's own notes record as a dead end here: `WANPolicyHead`
 only splits classifier-free guidance across ranks, so each rank still holds a full ~44.6 GiB

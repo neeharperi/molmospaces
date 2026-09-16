@@ -13,7 +13,7 @@
 # The vendored host_server_droid.py needs scripts/molmoact2_patches/0001-*.patch applied --
 # the live allenai/MolmoAct2-DROID remote code (fetched fresh via trust_remote_code, so NOT
 # pinned by the submodule) renamed action_mode -> inference_action_mode, and the unpatched
-# call raises. apply_third_party_patches.sh is idempotent; re-run it after any submodule bump.
+# call raises. That rename landed upstream in allenai/molmoact2, so a current checkout has it.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"

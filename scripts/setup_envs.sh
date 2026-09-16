@@ -290,9 +290,9 @@ setup_molmoact2() {
     # openpi-client here: this policy speaks HTTP, and staying off openpi-client frees this env
     # from its numpy<2 pin.
     "$PIP" install fastapi "uvicorn[standard]" json-numpy
-    # Our local fixes to the vendored server script (the live checkpoint renamed action_mode ->
-    # inference_action_mode) live as a patch, since a submodule update would silently revert them.
-    bash scripts/apply_third_party_patches.sh molmoact2
+    # Nothing to patch here any more: the action_mode -> inference_action_mode rename the
+    # live checkpoint requires landed upstream in allenai/molmoact2, and so did the Blackwell
+    # torch bump (further than we asked -- upstream went to 2.11.0 on cu128).
 }
 
 # ---------------------------------------------------------------- mlspaces-m2t2
@@ -405,9 +405,9 @@ setup_dreamzero() {
     "$PIP" install "deepspeed==0.16.5"
     "$PIP" install "huggingface_hub[cli]"
     unset PIP_CONSTRAINT
-    # The single-GPU/48GB inference patch. Without it WANPolicyHead only splits classifier-free
-    # guidance across ranks, so each rank holds a full ~44.6 GiB replica and 2 ranks OOM host RAM.
-    bash scripts/apply_third_party_patches.sh dreamzero
+    # The single-GPU/48GB inference work is commits in the dreamzero checkout now, not a
+    # patch replayed here. check_env below asserts they are present, because without them the
+    # server OOMs on the third inference of an episode.
 }
 
 
@@ -614,10 +614,10 @@ if _sm not in " ".join(torch.cuda.get_arch_list()):
     print(f"  FAIL: {_sm} missing from torch arch_list"); ok = False
 import groot.vla.model.dreamzero.base_vla as bv
 if "compute_device" not in inspect.getsource(bv.VLA.prepare_input):
-    print("  FAIL: dreamzero single-GPU patch NOT applied "
-          "(run scripts/apply_third_party_patches.sh dreamzero)"); ok = False
+    print("  FAIL: this dreamzero checkout predates the single-GPU commits "
+          "(git -C $MLSPACES_MODELS_DIR/dreamzero pull origin main)"); ok = False
 else:
-    print("  dreamzero single-GPU patch applied")
+    print("  dreamzero single-GPU commits present")
 sys.exit(0 if ok else 1)
 EOF
         ;;
