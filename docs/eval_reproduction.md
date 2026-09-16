@@ -4617,3 +4617,40 @@ since that is the one way this comparison can lie.
 both arms, compare, cleanup -- in one command, defaulting to `HEAD~1`. The reason the probe
 sat unrun for a session is that its recipe was four steps long and two of them failed
 silently; a wrapper is the difference between a check that exists and a check that gets run.
+
+## Two lanes of 20 workers exhausts 188 GB of host RAM, and it is RAM, not VRAM
+
+Both cards are free on this host, so the obvious way to run two policies' cells is one lane
+per card -- which is what `scripts/run_full_matrix.sh` is built for, with `LANE_GPU` and
+`MUJOCO_EGL_DEVICE_ID` per lane. Two Open-v1 lanes were launched that way, `pi05_droid` on
+GPU 0 and `pi0_droid` on GPU 1, each at `--num_workers 20`.
+
+**Both were killed by the host at 360 and 311 of 1000 episodes.** Out of memory -- system
+memory. Nothing in either log says so; the lanes simply stop.
+
+The mistake is specific and worth naming, because the number that looked safe was measured
+for a different thing. `--num_workers 20` at full coverage is recorded here as affordable:
+915 episodes of Close-v1 in 42 minutes. That was **one** lane. Forty concurrent MuJoCo
+workers, each holding a ProcTHOR house's model and renderer, is roughly 4 GB apiece, and
+188 GB does not cover it once the two JAX policy servers and a desktop session are also
+resident. GPU memory was never the constraint: the cards sat at 44-48 GB of 48, which looks
+alarming and was not what failed.
+
+So the worker count is a **per-host** budget, not per-card:
+
+| lanes x workers | outcome |
+|---|---|
+| 1 x 20 | 915 episodes in 42 min, repeatedly |
+| 2 x 20 | killed at ~1/3 coverage, both lanes |
+
+Two lanes at 10 workers each would fit, and buys nothing: the total worker count is what sets
+throughput, and 20 of them saturate both cards' renderers already (both GPUs measured at
+87-96% utilisation during the two-lane run, before it died). On this host, run cells
+**sequentially at 20 workers**, not concurrently. `scripts/cell_progress.py` is what makes
+that bearable -- it reads a rate off a cell that is still running.
+
+> A second user's interactive session (Firefox, Slack, VS Code) was resident throughout,
+> worth ~10 GB and, at its peak, about 9 cores. It halved the lanes' episode rate for a
+> stretch -- 10.9/min down to 4.9/min and back -- which is a reminder that this host is
+> shared and a wall-clock estimate made on it is not repeatable. It was not what caused the
+> kill; 40 workers were.
