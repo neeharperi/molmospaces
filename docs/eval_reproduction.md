@@ -4618,15 +4618,21 @@ both arms, compare, cleanup -- in one command, defaulting to `HEAD~1`. The reaso
 sat unrun for a session is that its recipe was four steps long and two of them failed
 silently; a wrapper is the difference between a check that exists and a check that gets run.
 
-## Two lanes of 20 workers exhausts 188 GB of host RAM, and it is RAM, not VRAM
+## Two lanes of 20 workers gets stopped for memory, and it is host RAM, not VRAM
 
 Both cards are free on this host, so the obvious way to run two policies' cells is one lane
 per card -- which is what `scripts/run_full_matrix.sh` is built for, with `LANE_GPU` and
 `MUJOCO_EGL_DEVICE_ID` per lane. Two Open-v1 lanes were launched that way, `pi05_droid` on
 GPU 0 and `pi0_droid` on GPU 1, each at `--num_workers 20`.
 
-**Both were killed by the host at 360 and 311 of 1000 episodes.** Out of memory -- system
-memory. Nothing in either log says so; the lanes simply stop.
+**Both were stopped at 360 and 311 of 1000 episodes**, for system memory. Nothing in either
+log says so; the lanes simply end.
+
+Be precise about what did the stopping, because it bounds what can be concluded. The
+supervising harness stopped them, citing low system memory; `dmesg` records no kernel OOM
+kill. No host-RAM sample was taken while the two lanes ran, so **how close to the 188 GB
+ceiling it actually got is unmeasured.** What is certain is that the memory pressure was real
+enough to trip a guard, and that it was system memory rather than VRAM.
 
 The number that looked safe was measured for a different thing. `--num_workers 20` at full
 coverage is recorded here as affordable -- 915 episodes of Close-v1 in 42 minutes, three
