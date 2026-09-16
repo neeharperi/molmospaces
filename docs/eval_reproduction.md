@@ -4714,3 +4714,90 @@ assertable across processes, and this check is right to report rather than asser
 than climbing per episode, so `release()` -- guarded closes plus dropping the sampler and a
 `gc.collect()` -- is releasing each scene. The unguarded `task.close()` it replaced would
 have held all eight.
+
+## The per-episode memory, found and fixed: it was deferred cleanup, not a leak
+
+The measurement above said 0.19 GB per episode retired, linear, at a fixed worker count. That
+reads like a leak. It is not one, and the distinction is what made it fixable in six lines.
+
+**Where it was.** `eval_main.py:437` sets `filter_for_successful_trajectories = False`, so
+eval keeps every episode, not just the successes. The episode loop appended
+`task.get_history()` -- camera frames included -- to a per-house list, and
+`prepare_episode_for_saving()` was called only at the end of the house, over that whole list.
+That function is the one that writes an episode's videos and pops the camera sensors out of
+the observations, and its own comment says why it matters:
+
+```
+# MEMORY OPTIMIZATION: Save videos BEFORE batching to avoid massive memory spike
+# Camera images are ~80% of episode memory.
+```
+
+The optimisation is real and it was running one level too high: by the time it ran, every
+episode of the house was already resident. `json_eval_runner.py` forces one work item per
+house (load-bearing -- it is the fix for an 8x oversampling bug), and bench-v1 puts ~33
+episodes in a house. A worker therefore held ~33 episodes of frames at once.
+
+Grounded against what actually lands on disk: an Open-v1 episode runs to a 58-step horizon at
+624x352 across two cameras, so ~58 MB of raw RGB, while the saved artefacts are 2.9 MB of h5
+for 15 episodes plus ~0.3 MB per mp4. The frames were being held in bulk and then thrown away.
+
+**The fix** is to call `prepare_episode_for_saving` in the episode loop instead of the
+house-save loop. Same function, same work, different moment. `save_house_trajectories` now
+receives already-prepared episodes.
+
+### Measured, with retained data separated from RSS
+
+`scripts/probe_episode_retention.py` builds real episodes, steps them to the horizon with
+null actions and retains them both ways. It reports two columns on purpose: `d rss` is what
+the host sees and includes pages the allocator has not returned, while `data MB` walks the
+retained list for the real buffer sizes of its arrays.
+
+| mode | retained data | RSS growth (steady state) | after 6 episodes |
+|---|---|---|---|
+| `accumulate` (before) | **74 MB/episode** | ~120 MB/episode | 445 MB held |
+| `prepare` (after) | **4 MB/episode** | ~40 MB/episode | 24 MB held |
+
+**An 18x reduction in what is actually held.** Note that RSS grows faster than retained data
+in both arms -- 120 against 74, and 40 against 4. That gap is the allocator, not retention,
+and separating the two is what stopped this becoming a hunt for a leak that does not exist.
+
+Projected onto a 33-episode bench-v1 house: held frames go from ~2.4 GB to ~0.13 GB per
+worker, and RSS growth from ~3.9 GB to ~1.3 GB. Across 20 workers that is ~78 GB down to
+~26 GB, which is the difference between exceeding this host's 188 GB partway through a cell
+and not.
+
+### Verified three ways
+
+**The outputs are unchanged.** The same six-episode one-house benchmark through the real
+pipeline, patched and at HEAD, with `DummyBenchmarkEvalConfig` so neither arm needs a policy
+server: 12 mp4s each with **identical filenames**, 6 trajectories each, and an **identical
+35-line h5 schema**. Both exit 0.
+
+**The behaviour change is visible while it runs.** At HEAD the run reaches 6/6 episodes with
+zero videos on disk and then writes all 12 in a burst; patched, the videos appear two per
+episode as it goes. The house-end save reflects it: **12.39 s (batch 12.26 s) at HEAD against
+0.14 s patched**, because the encoding is amortised rather than landing in one lump.
+
+**Datagen still works.** `save_house_trajectories` and `prepare_episode_for_saving` have no
+callers outside the file that was changed, so datagen flows through the same path, and
+upstream's own pipeline suite -- `mlspaces_tests/data_generation/test_franka_pick_and_place.py`
+and `test_franka_pick.py`, which drive `ParallelRolloutRunner` -- is **30 passed** on the
+patched tree.
+
+> One behavioural edge, logged rather than assumed. `len(house_raw_histories)` is also
+> datagen's early-stop signal, and it used to count an episode whether or not it survived
+> preparation, because preparation came later. `prepare_episode_for_saving` returns None only
+> for an episode with no observations at all, which cannot follow a rollout that stepped -- so
+> the count is unchanged in practice, and the pipeline now logs a warning if it ever is not.
+
+### An isolation trap, hit again
+
+The first attempt at the end-to-end comparison ran both arms against the *patched* code and
+would have reported a clean pass. The HEAD arm ran out of a git worktree with `cd` into it,
+on the belief that cwd is `sys.path[0]`. For `python some/script.py` it is not -- `sys.path[0]`
+is the **script's** directory, and the cwd is not on `sys.path` at all, so `molmo_spaces`
+resolved through the editable install to the main checkout.
+
+It gave itself away only because the arm that should have deferred its videos was writing
+them mid-house. `PYTHONPATH` is what isolates, exactly as
+`scripts/probe_policy_payload.py`'s docstring already says.

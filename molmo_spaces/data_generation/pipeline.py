@@ -181,7 +181,7 @@ def setup_viewer(
 
 def save_house_trajectories(
     worker_logger,
-    house_raw_histories: list,
+    house_prepared_episodes: list,
     house_output_dir: Path,
     exp_config: "MlSpacesExpConfig",
     batch_suffix: str,
@@ -194,7 +194,9 @@ def save_house_trajectories(
 
     Args:
         worker_logger: Logger instance
-        house_raw_histories: List of episode info dicts with 'history' and 'sensor_suite'
+        house_prepared_episodes: Episodes already through prepare_episode_for_saving --
+            videos written, camera sensors removed. Prepared in the episode loop rather
+            than here so that only one episode's camera frames are ever resident.
         house_output_dir: Output directory path
         exp_config: Experiment configuration
         batch_suffix: Suffix for batch file naming
@@ -202,14 +204,14 @@ def save_house_trajectories(
         batch_num: Batch number for logging
         total_batches: Total batches for logging
     """
-    if not house_raw_histories:
+    if not house_prepared_episodes:
         worker_logger.warning(f"No trajectory data to save for {house_output_dir.name}")
         return
 
     batch_info = f" batch {batch_num}/{total_batches}" if batch_num is not None else ""
     worker_logger.info(
-        f"Batching and saving trajectory data for {house_output_dir.name}{batch_info}: "
-        f"{len(house_raw_histories)} episodes"
+        f"Saving trajectory data for {house_output_dir.name}{batch_info}: "
+        f"{len(house_prepared_episodes)} episodes"
     )
 
     os.makedirs(house_output_dir, exist_ok=True)
@@ -219,19 +221,8 @@ def save_house_trajectories(
         if datagen_profiler is not None:
             datagen_profiler.start("save_batch_prep")
 
-        house_trajectory_data = []
-        for idx, episode_info in enumerate(house_raw_histories):
-            prepared_episode = prepare_episode_for_saving(
-                episode_info["history"],
-                episode_info["sensor_suite"],
-                fps=exp_config.fps,
-                save_dir=house_output_dir,
-                episode_idx=idx,
-                save_file_suffix=batch_suffix,
-            )
-            if prepared_episode is not None:
-                house_trajectory_data.append(prepared_episode)
-            del episode_info["history"]
+        # Already prepared, one episode at a time, in the episode loop.
+        house_trajectory_data = list(house_prepared_episodes)
 
         t_batch = time.perf_counter() - t_start
         if datagen_profiler is not None:
@@ -1069,27 +1060,66 @@ class ParallelRolloutRunner:
                             f"object {object_name} completed with success={success}"
                         )
 
-                        # Collect trajectory
+                        # Collect trajectory.
+                        #
+                        # prepare_episode_for_saving is called HERE, per episode, rather than
+                        # over the whole house in save_house_trajectories. It is the same
+                        # call doing the same work; the only change is when. That matters
+                        # because of what it does: it writes this episode's videos and then
+                        # pops the camera sensors out of the observations, and its own
+                        # comment puts camera images at ~80% of an episode's memory.
+                        #
+                        # Deferred to the end of the house, every episode's raw frames stay
+                        # resident until then. On bench-v1 that is ~33 episodes per house at
+                        # ~130 MB each -- 4.3 GB per worker, and 20 workers of that is what
+                        # stopped a full-coverage Open-v1 run partway through. Prepared as
+                        # they land, one episode's frames are live at a time and what
+                        # accumulates is the small arrays that reach the h5.
                         should_save = success or not filter_for_successful_trajectories
                         history = task.get_history()
                         should_save_debug = not should_save and random.random() < 0.01
 
                         if should_save or should_save_debug:
-                            episode_info = {
-                                "history": history,
-                                "sensor_suite": task.sensor_suite,
-                                "success": success,
-                                "seed": episode_seed,
-                            }
-                            if should_save:
-                                house_raw_histories.append(episode_info)
-                            elif should_save_debug:
-                                house_debug_raw_histories.append(episode_info)
+                            collected = house_raw_histories if should_save else house_debug_raw_histories
+                            episode_save_dir = house_output_dir if should_save else house_debug_dir
+                            # save_house_trajectories used to create this; the videos are
+                            # written before it now, so it has to exist earlier.
+                            os.makedirs(episode_save_dir, exist_ok=True)
+                            prepared = prepare_episode_for_saving(
+                                history,
+                                task.sensor_suite,
+                                fps=exp_config.fps,
+                                save_dir=episode_save_dir,
+                                # Indexes the video filenames. len() before the append, so
+                                # the numbering stays contiguous even if an episode prepares
+                                # to None -- enumerate() over the raw list used to count
+                                # those too and leave a gap.
+                                episode_idx=len(collected),
+                                save_file_suffix=batch_suffix,
+                            )
+                            if prepared is not None:
+                                collected.append(prepared)
+                            else:
+                                # len(house_raw_histories) is also datagen's early-stop
+                                # signal (should_stop_early below), and it used to count an
+                                # episode whether or not it survived preparation, because
+                                # preparation happened later. prepare_episode_for_saving
+                                # only returns None for an episode with no observations at
+                                # all, which cannot follow a rollout that stepped -- so the
+                                # count is unchanged in practice. Logged rather than assumed,
+                                # because if it ever does happen the quota shifts by one and
+                                # nothing else would say so.
+                                worker_logger.warning(
+                                    f"Worker {worker_id} house {house_id} episode {episode_idx} "
+                                    "produced no saveable data; it does not count toward "
+                                    "samples_per_house, which differs from the pre-streaming "
+                                    "behaviour"
+                                )
+                            if should_save_debug:
                                 worker_logger.info(
                                     f"Queueing failed trajectory for debug (seed: {episode_seed})"
                                 )
-                        else:
-                            del history
+                        del history
 
                         # Update house counters
                         house_total_count += 1
