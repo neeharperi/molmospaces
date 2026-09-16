@@ -4363,3 +4363,35 @@ needs a **freshly started server**, not just a single client.
 `scripts/compare_harnesses.py` refuses to issue a verdict until the control agrees with
 itself, which is why this surfaced as VOID rather than as a false divergence blamed on the
 rig.
+
+### A closed-loop rollout does not replay, even with a fresh server
+
+Three arrangements, same 5-episode Close-v1 draw, `pi05_droid_jointpos_polaris`, two runs each:
+
+| arrangement | flipped |
+|---|---|
+| `DETERMINISTIC=1`, 5 workers, one live server | 1 of 5 |
+| `DETERMINISTIC=1`, 1 worker, one live server | 2 of 5 |
+| `DETERMINISTIC=1`, 1 worker, **fresh server per run** | 1 of 5 |
+
+The fresh-server hypothesis was worth testing and is not the answer: openpi seeds
+`jax.random.key(0)` per process and splits per inference, so two runs against one live server
+genuinely do start from different sampler states -- but restarting it does not close the gap
+either. This is the same effect line 3453 records (6 of 30 on Pick-v1.5 with identical code):
+a sub-milliradian difference in one action compounds over 500 closed-loop steps until an
+episode lands on the other side of a success threshold.
+
+**So per-episode identity is not an available criterion for this policy**, and a
+cross-harness comparison that demanded it would be reporting noise.
+`scripts/compare_harnesses.py` says VOID rather than FAIL for exactly this reason, and it did
+so on all three arrangements above rather than blaming the rig.
+
+What remains, and is exact: `scripts/check_sim_server_parity.py` compares the **initial
+condition** the two sides construct for a given episode index -- the house, the arm's start
+pose and the rendered camera images, byte for byte. Both go through `JsonEvalTaskSampler`, so
+the scene ought to match by construction; what that check actually exercises is
+`droid/scripts/sim_server.py`'s translation layer (world frame to robot base, MolmoSpaces
+sensor names to DROID camera roles, 0..255 Robotiq control to a 0..1 closed fraction, metres
+to uint16 millimetres), which is not shared and is where a plausible-but-different world
+would come from. Outcomes then have to be compared as distributions over a common episode
+set, not episode by episode.
