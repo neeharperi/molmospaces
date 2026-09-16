@@ -106,6 +106,14 @@ while time.time() - t0 < 40:
 """
 
 
+# How quiet the machine has to be before a memory-delta attribution means anything, and how
+# much the winning card has to move. A MuJoCo offscreen renderer at 1280x720 lands in the
+# hundreds of MiB, so 200 is comfortably below one renderer and far above driver noise.
+CONTROL_SECONDS = 8
+QUIET_MIB = 100
+MIN_PEAK_MIB = 200
+
+
 def gpu_mem() -> list[int]:
     out = subprocess.check_output(
         ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"], text=True)
@@ -128,6 +136,24 @@ def measure_mapping(n_devices: int) -> list[tuple[int, int]]:
         script = f.name
     rows = []
     try:
+        # A control window first, with nothing of ours running. This probe attributes a
+        # device by which GPU's *total* memory moved, and a neighbour allocating during the
+        # window is indistinguishable from our own renderer -- a lane starting on GPU 0 while
+        # device 1 renders 2.7 GB on GPU 1 makes GPU 0 the peak and the wrong answer gets
+        # cached. Per-process attribution is not available here: an EGL renderer holds a
+        # graphics context, which nvidia-smi --query-compute-apps does not list at all.
+        # So the machine being quiet is a precondition, and it is now measured rather than
+        # assumed.
+        before = gpu_mem()
+        time.sleep(CONTROL_SECONDS)
+        drift = [abs(a - b) for a, b in zip(gpu_mem(), before, strict=True)]
+        print(f"    control ({CONTROL_SECONDS}s, nothing of ours running): drift {drift} MiB")
+        if max(drift) > QUIET_MIB:
+            print(f"\n  The GPUs are not quiet: {max(drift)} MiB moved with nothing of ours")
+            print("  running, which is more than a renderer's own footprint would stand out")
+            print("  against. Re-run when the other jobs are done; nothing was written.")
+            return []
+
         for i in range(n_devices):
             before = gpu_mem()
             env = dict(os.environ, MUJOCO_EGL_DEVICE_ID=str(i))
@@ -140,25 +166,42 @@ def measure_mapping(n_devices: int) -> list[tuple[int, int]]:
                 proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 proc.kill()
-            peak = max(delta)
-            gpu = delta.index(peak) if peak > 30 else None
+            ranked = sorted(delta, reverse=True)
+            peak = ranked[0]
+            runner_up = ranked[1] if len(ranked) > 1 else 0
+            # Unambiguous means big AND clear of the next card, not merely the maximum. One
+            # renderer allocates on one device; two cards moving together is interference.
+            decisive = peak >= MIN_PEAK_MIB and peak >= 2 * max(runner_up, 0)
+            gpu = delta.index(peak) if decisive else None
             rows.append((i, gpu))
             print(f"    MUJOCO_EGL_DEVICE_ID={i}  ->  "
-                  + (f"nvidia-smi GPU {gpu}  (+{peak} MiB)" if gpu is not None
+                  + (f"nvidia-smi GPU {gpu}  (+{peak} MiB, next card +{runner_up})" if gpu is not None
                      else f"INCONCLUSIVE (deltas {delta}) -- is another job churning memory?"))
             time.sleep(2)
     finally:
         os.unlink(script)
+
     good = [(i, g) for i, g in rows if g is not None]
-    if len(good) == len(rows) and all(i == g for i, g in good):
+    # Partial and non-injective maps used to be written anyway. Both are wrong in the way
+    # that costs the parallelism this script exists to protect: a launcher reading a map with
+    # one device missing, or with two devices pointing at one card, pins lanes to the wrong
+    # GPU and nothing errors.
+    if len(good) < len(rows):
+        print(f"\n  Only {len(good)} of {len(rows)} device(s) measured decisively.")
+        print("  A partial map would pin some lanes correctly and others silently wrong,")
+        print("  so nothing was written. Re-run when the GPUs are quieter.")
+        return []
+    if len({g for _, g in good}) != len(good):
+        print(f"\n  Two EGL devices measured onto the same GPU ({good}), which one renderer")
+        print("  each cannot produce -- so the windows were contaminated. Nothing written.")
+        return []
+
+    if all(i == g for i, g in good):
         print("\n  MEASURED: identity. MUJOCO_EGL_DEVICE_ID == nvidia-smi index.")
-    elif good:
+    else:
         print("\n  MEASURED mapping (use this, not the nvidia-smi index):")
         for i, g in sorted(good, key=lambda r: r[1]):
             print(f"    to render on nvidia-smi GPU {g}  ->  MUJOCO_EGL_DEVICE_ID={i}")
-    else:
-        print("\n  Nothing measurable. Re-run when the GPUs are quieter.")
-        return []
     write_map(good)
     return good
 
@@ -179,7 +222,7 @@ def write_map(pairs: list[tuple[int, int]]) -> None:
     print(f"\n  wrote {out}")
 
 
-def main() -> None:
+def main() -> int:
     # Measurement is the default, and the DRM inference below is only a cross-check.
     #
     # It used to be the other way round -- infer, and measure only when inference resolved
@@ -218,10 +261,16 @@ def main() -> None:
 
     if infer_only:
         print("\n  --infer-only: not measured, so not written. This is a hint, not the mapping.")
-        return
+        return 0
 
     measured = measure_mapping(len(devices))
-    if measured and resolved:
+    if not measured:
+        # Non-zero, because the caller's whole question was "what is the mapping" and there
+        # is no answer. launch_campaign.sh gates on this exit status.
+        print("\n  NO MAPPING. runs/_egl_mapping.txt was left as it was"
+              f"{' (it exists and may be stale)' if (REPO_ROOT / 'runs' / '_egl_mapping.txt').exists() else ' (absent)'}.")
+        return 1
+    if resolved:
         inferred = {i: str(s) for i, s in resolved}
         disagree = [(i, g) for i, g in measured if i in inferred and inferred[i] != str(g)]
         if disagree:
@@ -232,7 +281,8 @@ def main() -> None:
                 print(f"    EGL {i}: inferred GPU {inferred[i]}, measured GPU {gpu}")
             print("  The measurement is the mapping. The inference is resolving DRM nodes,")
             print("  which under this vendor do not correspond to the devices EGL hands out.")
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
