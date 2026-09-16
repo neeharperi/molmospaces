@@ -120,6 +120,17 @@ FLAGS+=(--checkpoint-base-dir="$OPENPI_CKPT_DIR")
 [ -n "${BATCH_SIZE:-}" ] && FLAGS+=(--batch-size="$BATCH_SIZE")
 [ "$RESUME" = "1" ] && FLAGS+=(--resume)
 FLAGS+=("${SMOKE_FLAGS[@]}")
+# Anything else, verbatim. Needed for a run against a dataset that is not the full release:
+# the `*_from_base` configs default filter_dict_path to the published
+# droid_sample_ranges_v1_0_1.json, whose keys are the real 1.0.1 episodes, so a 100-episode
+# sample would be filtered to nothing -- and every knob openpi has is a tyro flag, so a
+# pass-through is the whole fix.
+#
+#   EXTRA_FLAGS="--data.datasets.0.filter-dict-path=None" MODEL=pi05 SMOKE=1 ...
+#
+# Deliberately word-split rather than an array: this is a shell launcher meant to be typed.
+# shellcheck disable=SC2206
+[ -n "${EXTRA_FLAGS:-}" ] && FLAGS+=(${EXTRA_FLAGS})
 
 # Somewhere durable, not a scratch directory. The first pilot logged into a per-session
 # /tmp path that disappeared with the session -- the loss history of a ten-day run should

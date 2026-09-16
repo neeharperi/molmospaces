@@ -102,7 +102,7 @@ VERDICT_RULE = os.environ.get("MLSPACES_VERDICT_RULE", "overlap-or-better")
 
 def verdict_row(
     task: str, policy: str, successes: int, total: int, leaderboard_pct: float,
-    leaderboard_n: int | None = None,
+    leaderboard_n: int | None = None, date: str = "",
 ) -> dict:
     lo, hi = wilson_interval(successes, total)
     ours_pct = 100.0 * successes / total if total else 0.0
@@ -125,17 +125,26 @@ def verdict_row(
         "ours_pct": round(ours_pct, 1),
         "n": total,
         "leaderboard_pct": leaderboard_pct,
+        # Which run directory this came from. latest_results_csv picks the lexically last
+        # one, so a cell tagged with something that does not sort like a date can quietly
+        # become "latest" -- naming it here is the difference between reading a verdict and
+        # trusting one. (Diagnostic cells are excluded by the leading-underscore convention;
+        # this is for the ones that are not diagnostic but are not the newest either.)
+        "date": date,
         "verdict": verdict,
     }
 
 
 def print_table(rows: list[dict]) -> None:
-    header = f"{'task':<20}{'policy':<18}{'ours (n)':<16}{'leaderboard':<14}{'verdict'}"
+    header = (
+        f"{'task':<20}{'policy':<18}{'ours (n)':<16}{'leaderboard':<14}{'verdict':<12}{'from'}"
+    )
     print(header)
     for r in rows:
         ours = f"{r['ours_pct']}% ({r['n']})"
+        lb = f"{r['leaderboard_pct']}%"
         print(
-            f"{r['task']:<20}{r['policy']:<18}{ours:<16}{r['leaderboard_pct']}%{'':<7}{r['verdict']}"
+            f"{r['task']:<20}{r['policy']:<18}{ours:<16}{lb:<14}{r['verdict']:<12}{r.get('date', '')}"
         )
 
 
@@ -193,7 +202,8 @@ def main() -> None:
         successes, total = successes_and_total(overall, metric)
         per_task_rows.append(
             verdict_row(task, policy, successes, total, row["success_rate"],
-                        leaderboard_n=int(row.get("n_episodes") or 0) or None)
+                        leaderboard_n=int(row.get("n_episodes") or 0) or None,
+                        date=results_csv.parent.name)
         )
 
         if task in GROUP_B:
