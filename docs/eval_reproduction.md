@@ -4628,26 +4628,31 @@ GPU 0 and `pi0_droid` on GPU 1, each at `--num_workers 20`.
 **Both were killed by the host at 360 and 311 of 1000 episodes.** Out of memory -- system
 memory. Nothing in either log says so; the lanes simply stop.
 
-The mistake is specific and worth naming, because the number that looked safe was measured
-for a different thing. `--num_workers 20` at full coverage is recorded here as affordable:
-915 episodes of Close-v1 in 42 minutes. That was **one** lane. Forty concurrent MuJoCo
-workers, each holding a ProcTHOR house's model and renderer, is roughly 4 GB apiece, and
-188 GB does not cover it once the two JAX policy servers and a desktop session are also
-resident. GPU memory was never the constraint: the cards sat at 44-48 GB of 48, which looks
-alarming and was not what failed.
-
-So the worker count is a **per-host** budget, not per-card:
+The number that looked safe was measured for a different thing. `--num_workers 20` at full
+coverage is recorded here as affordable -- 915 episodes of Close-v1 in 42 minutes, three
+times -- and that was **one** lane. GPU memory was never the constraint: the cards sat at
+44-48 GB of 48, which looks alarming and was not what failed.
 
 | lanes x workers | outcome |
 |---|---|
 | 1 x 20 | 915 episodes in 42 min, repeatedly |
-| 2 x 20 | killed at ~1/3 coverage, both lanes |
+| 2 x 20 | killed at 360 and 311 of 1000, both lanes |
 
-Two lanes at 10 workers each would fit, and buys nothing: the total worker count is what sets
-throughput, and 20 of them saturate both cards' renderers already (both GPUs measured at
-87-96% utilisation during the two-lane run, before it died). On this host, run cells
-**sequentially at 20 workers**, not concurrently. `scripts/cell_progress.py` is what makes
-that bearable -- it reads a rate off a cell that is still running.
+**What is measured, on a single 20-worker Open-v1 lane:** the host settles at **~64 GB used
+against a 22 GB baseline**, so about **2.1 GB per worker** once every worker has a house
+loaded. Forty of those is ~84 GB, which 188 GB does cover -- so a static per-worker footprint
+does not by itself explain the kill, and the mechanism is **not established here**. The two
+candidates the evidence leaves open are growth over the run (671 cumulative episodes had been
+completed between the two lanes when they died, and a per-episode leak is exactly what
+`scripts/sim_server.py`'s own `_release()` was written to avoid) and a transient peak while
+several workers load a house at once.
+
+Either way the operational answer is the same, and it is the one to follow until someone
+measures the cause: on this host run cells **sequentially at 20 workers**. Two lanes of 10
+would fit and buys nothing, because total worker count is what sets throughput and 20 already
+saturate both cards' renderers -- both GPUs measured 87-96% busy during the two-lane run.
+`scripts/cell_progress.py` is what makes sequential bearable: it reads a rate, and a
+category-coverage table, off a cell that is still running.
 
 > A second user's interactive session (Firefox, Slack, VS Code) was resident throughout,
 > worth ~10 GB and, at its peak, about 9 cores. It halved the lanes' episode rate for a
