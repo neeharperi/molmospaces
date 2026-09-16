@@ -4644,21 +4644,42 @@ times -- and that was **one** lane. GPU memory was never the constraint: the car
 | 1 x 20 | 915 episodes in 42 min, repeatedly |
 | 2 x 20 | killed at 360 and 311 of 1000, both lanes |
 
-**What is measured, on a single 20-worker Open-v1 lane:** the host settles at **~64 GB used
-against a 22 GB baseline**, so about **2.1 GB per worker** once every worker has a house
-loaded. Forty of those is ~84 GB, which 188 GB does cover -- so a static per-worker footprint
-does not by itself explain the kill, and the mechanism is **not established here**. The two
-candidates the evidence leaves open are growth over the run (671 cumulative episodes had been
-completed between the two lanes when they died, and a per-episode leak is exactly what
-`scripts/sim_server.py`'s own `_release()` was written to avoid) and a transient peak while
-several workers load a house at once.
+### The cause is a per-episode leak in the workers, measured
 
-Either way the operational answer is the same, and it is the one to follow until someone
-measures the cause: on this host run cells **sequentially at 20 workers**. Two lanes of 10
-would fit and buys nothing, because total worker count is what sets throughput and 20 already
-saturate both cards' renderers -- both GPUs measured 87-96% busy during the two-lane run.
-`scripts/cell_progress.py` is what makes sequential bearable: it reads a rate, and a
-category-coverage table, off a cell that is still running.
+A single 20-worker Open-v1 lane, sampled once a minute against its own episode count:
+
+| episodes done | host RAM used |
+|---|---|
+| 2 | 66.6 GB |
+| 22 | 74.4 GB |
+| 43 | 76.7 GB |
+| 65 | 80.5 GB |
+| 85 | 83.6 GB |
+| 105 | 86.4 GB |
+
+**0.19 GB per episode, linear, with a fixed worker count.** It is not a startup plateau and
+it is not contention: the 22-episode point is already past the last house load. Attributed by
+RSS, it is the workers themselves -- 20 of them averaged 2.1 GB each early in the run and
+**2.95 GB each at 134 episodes**, top process 3.7 GB. Each worker grows as it retires
+episodes.
+
+So the two-lane kill needs no parallelism explanation. The two lanes had completed 671
+episodes between them, and 671 x 0.19 is ~127 GB on top of a ~66 GB floor. One lane will
+reach the same ceiling on its own, around **episode 600-700** -- which means a 1000-episode
+Open-v1 cell **cannot complete on this host in one pass**, at any worker count, because the
+total leaked is set by episodes retired and not by how many workers retire them.
+
+That is consistent with what did work here: Close-v1 completed at 915 episodes, three times.
+Its mean episode is 53 steps, and if the leak tracks steps rather than episodes then Open-v1
+-- the longer task -- leaks more per episode and runs out sooner. Not proven; it is the
+reading that fits both observations.
+
+**What follows.** Two lanes of 10 buys nothing regardless (total worker count sets
+throughput, and 20 already had both GPUs at 87-96%), so run sequentially at 20. But for
+Open-v1 that is not enough on its own: either the leak gets found, or the cell is run in
+chunks and pooled, or it runs on a host with more memory than this one.
+`scripts/cell_progress.py` is what makes a long cell legible while it runs -- a rate, a
+category-coverage table, and the rate reweighted to the full mix.
 
 > A second user's interactive session (Firefox, Slack, VS Code) was resident throughout,
 > worth ~10 GB and, at its peak, about 9 cores. It halved the lanes' episode rate for a
