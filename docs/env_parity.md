@@ -143,11 +143,16 @@ the repo the checkpoint family name suggests ships neither.
 
 ### 1. `openpi` — different fork and different checkpoint
 
-The peer's `polaris-openpi` carries upstream `Physical-Intelligence/openpi` and serves the
-`pi05_droid_jointpos_polaris` config from
-`gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris`. This repo carries the
-`omarrayyann/openpi` fork and serves `pi05_droid_jointpos` from
-`gs://openpi-assets/checkpoints/pi05_droid_jointpos`.
+The peer's `polaris-openpi` carries upstream `Physical-Intelligence/openpi` and serves weights
+from `gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris`. This repo serves
+weights from `gs://openpi-assets/checkpoints/pi05_droid_jointpos`.
+
+**Tell the two apart by the bucket, not by the config name.** They used to differ by name too
+-- upstream's config is `pi05_droid_jointpos_polaris` and this side's was `pi05_droid_jointpos`
+-- but the openpi checkout beside this one now renames upstream's configs to drop the
+`_polaris` suffix, so both sides answer to `pi05_droid_jointpos` and only the `--policy.dir`
+says which checkpoint is loaded. `scripts/serve_openpi.sh` pins that directory explicitly for
+exactly this reason.
 
 This is **not** a version pin that could be reconciled. They are different checkpoints trained
 for different evaluation suites, and the MolmoSpaces leaderboard entry this campaign has to

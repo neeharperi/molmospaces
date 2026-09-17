@@ -1112,8 +1112,9 @@ to point at; this lands on tier 2, copied recipe plus a drift check.
    `m2t2_repo.pth` in both envs), and five `huggingface_hub[cli]` extra dependencies the peer
    missed through pip resolution order. Neither is on an inference path.
 6. **openpi stays divergent, by design.** Not a version pin: the peer serves
-   `pi05_droid_jointpos_polaris` from upstream `Physical-Intelligence/openpi`, this repo serves
-   `pi05_droid_jointpos` from the `omarrayyann` fork, and the latter is what the MolmoSpaces
+   `gs://openpi-assets/checkpoints/polaris/pi05_droid_jointpos_polaris` from upstream
+   `Physical-Intelligence/openpi`, this repo serves
+   `gs://openpi-assets/checkpoints/pi05_droid_jointpos`, and the latter is what the MolmoSpaces
    leaderboard entry was produced with. Adopting the peer's would make the reproduction fail by
    construction, which defeats the purpose parity serves. BENCHMARK.md's "parity wins" default
    is aimed at pins and does not sensibly extend to swapping the model under test.
@@ -4371,7 +4372,7 @@ rig.
 
 ### A closed-loop rollout does not replay, even with a fresh server
 
-Three arrangements, same 5-episode Close-v1 draw, `pi05_droid_jointpos_polaris`, two runs each:
+Three arrangements, same 5-episode Close-v1 draw, `pi05_droid_jointpos`, two runs each:
 
 | arrangement | flipped |
 |---|---|
@@ -4452,7 +4453,7 @@ to a 0..1 closed fraction, metres to uint16 millimetres -- is right where it can
 
 Running arm C -- the same episodes through droid's rollout loop -- at `--max-joint-step 0.2`,
 which is four times what the rig is proven at, the status band still reports `scale` between
-**0.48 and 0.89** on most ticks. `pi05_droid_jointpos_polaris` commands absolute joint
+**0.48 and 0.89** on most ticks. `pi05_droid_jointpos` commands absolute joint
 targets further than 0.2 rad from the current pose, repeatedly.
 
 That is a real deployment fact rather than a comparison artifact: the native harness applies
@@ -4463,7 +4464,7 @@ distributional.
 
 ### The cross-harness answer, at the resolution the benchmark allows
 
-Five Close-v1 episodes, `pi05_droid_jointpos_polaris`, oracle metric:
+Five Close-v1 episodes, `pi05_droid_jointpos`, oracle metric:
 
 | comparison | agreement |
 |---|---|

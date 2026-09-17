@@ -424,12 +424,17 @@ setup_openpi() {
     # envs are guarded -- resyncing under a live server is how a multi-day campaign turns into a
     # confusing mid-run failure.
     refuse_if_prefix_busy "$MLSPACES_MODELS_DIR/openpi/.venv" openpi || return 1
-    # NOT at parity with polaris-openpi, and deliberately so -- see docs/env_parity.md. That env
-    # carries upstream Physical-Intelligence/openpi with the pi05_droid_jointpos_polaris config;
-    # openpi registers the jointpos configs itself, in src/openpi/training/misc/polaris_config.py,
-    # MolmoSpaces leaderboard entry was produced with. Adopting the other would not be a version
-    # difference, it would be a different checkpoint, and the reproduction would fail by
-    # construction. Built by uv, not conda, because that is what the fork supports.
+    # NOT at parity with polaris-openpi, and deliberately so -- see docs/env_parity.md. That
+    # env carries upstream Physical-Intelligence/openpi, which is a different checkpoint from
+    # the one the MolmoSpaces leaderboard entry was produced with. Adopting it would not be a
+    # version difference, it would be a different checkpoint, and the reproduction would fail
+    # by construction. Built by uv, not conda, because that is what the checkout supports.
+    #
+    # The jointpos configs come from openpi itself, in
+    # src/openpi/training/misc/polaris_config.py. Upstream names them *_jointpos_polaris;
+    # this checkout renames them to plain *_jointpos, which is what check_env asserts below
+    # -- so that assertion failing against a fresh upstream clone is correct behaviour, not
+    # a broken environment.
     ( cd "$MLSPACES_MODELS_DIR/openpi" && uv sync )
 }
 
@@ -443,8 +448,8 @@ check_env() {  # $1 = env name
 import jax, openpi.training.config as c
 print(f"  jax {jax.__version__} devices={jax.devices()}")
 names = {x.name for x in c._CONFIGS}
-assert "pi05_droid_jointpos_polaris" in names, "pi05_droid_jointpos_polaris not registered"
-print("  openpi config pi05_droid_jointpos_polaris OK")
+assert "pi05_droid_jointpos" in names, "pi05_droid_jointpos not registered"
+print("  openpi config pi05_droid_jointpos OK")
 EOF
         [ $rc -eq 0 ] && echo "  $name OK (intentional divergence)" || echo "  $name FAILED"
         return $rc

@@ -1,16 +1,22 @@
 #!/usr/bin/env bash
 # Serve an openpi DROID checkpoint (pi0.5 on :8080, pi0 on :8081) for the eval harness.
 #
-#   PORT=8080 GPU=3 CONFIG=pi05_droid_jointpos_polaris bash scripts/serve_openpi.sh
-#   PORT=8081 GPU=3 CONFIG=pi0_droid_jointpos_polaris  bash scripts/serve_openpi.sh
+#   PORT=8080 GPU=3 CONFIG=pi05_droid_jointpos bash scripts/serve_openpi.sh
+#   PORT=8081 GPU=3 CONFIG=pi0_droid_jointpos  bash scripts/serve_openpi.sh
 #
-# CONFIG is an openpi TrainConfig NAME; CKPT_DIR is a directory of weights. They are
-# deliberately allowed to disagree, and here they do. The *_polaris configs are
-# registered by openpi ITSELF, in src/openpi/training/misc/polaris_config.py -- an
-# upstream Physical-Intelligence file -- so nothing has to be patched into openpi to
-# serve these. CKPT_DIR still points at checkpoints/pi05_droid_jointpos, the legacy
-# bucket every archived run in runs/ was produced from, which keeps the recorded
-# policy_checkpoint provenance string comparable across the migration.
+# CONFIG is an openpi TrainConfig NAME; CKPT_DIR is a directory of weights, and they are
+# deliberately allowed to disagree. These configs live in
+# src/openpi/training/misc/polaris_config.py, which openpi registers itself, so nothing
+# has to be patched into openpi to serve them. CKPT_DIR points at
+# checkpoints/pi05_droid_jointpos, the bucket every archived run in runs/ was produced
+# from, which keeps the recorded policy_checkpoint provenance string comparable.
+#
+# **These used to be CONFIG=*_jointpos_polaris and no longer are.** Upstream names them
+# with that suffix; our openpi checkout renames them to plain *_jointpos, because joint
+# position is the rig's default action space and the suffix was noise. An archived command
+# line naming the old form will fail -- openpi answers it with "Did you mean
+# 'pi05_droid_jointpos'?" -- so fix the command, not the config. The `gs://` paths inside
+# those configs still say polaris; those are PolaRiS' published buckets.
 #
 # The reference campaign launched this by hand and never committed a script, which was fine
 # when openpi had a GPU to itself. It does not here: the campaign runs seven policy servers
@@ -29,10 +35,10 @@ cd "$(dirname "$0")/.."
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
 PORT="${PORT:-8080}"
 GPU="${GPU:-0}"
-CONFIG="${CONFIG:-pi05_droid_jointpos_polaris}"
-# Not checkpoints/$CONFIG: the config name gained a _polaris suffix, the weights did
-# not. Strip it so the default still finds the directory the campaign used.
-CKPT_DIR="${CKPT_DIR:-checkpoints/${CONFIG%_polaris}}"
+CONFIG="${CONFIG:-pi05_droid_jointpos}"
+# The config name and the weights directory agree again now that the _polaris suffix is
+# gone, so this is a plain substitution rather than the strip it used to be.
+CKPT_DIR="${CKPT_DIR:-checkpoints/$CONFIG}"
 
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export XLA_PYTHON_CLIENT_MEM_FRACTION="${XLA_PYTHON_CLIENT_MEM_FRACTION:-0.20}"
