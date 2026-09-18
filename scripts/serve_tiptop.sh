@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Serve TiPToP's planner (:18765) for the eval harness, with M2T2 behind it.
+# Serve TiPToP's planner (:18765) for the eval harness, with its perception behind it.
 #
 #   GPU=1 bash scripts/serve_tiptop.sh
 #   GPU=1 PORT=18765 M2T2=skip bash scripts/serve_tiptop.sh
+#   GPU=1 STEREO=skip bash scripts/serve_tiptop.sh
 #
 # The script the rest of this repo already assumed existed: scripts/sim.sh answers
 # a missing server with "bash scripts/serve_tiptop.sh" and there was no such file,
@@ -27,20 +28,24 @@
 #    required 0.0.6, found <0.0.2", which is a lie about the version and says
 #    nothing about the shadowing. `cd` to the repo root is the whole fix.
 #
-# 3. **M2T2 (:8123) is a hard dependency that fails quietly.** The planner
-#    health-checks it per request rather than at startup, so with M2T2 down every
-#    plan comes back a well-formed success=False and a cell scores ~0% -- which is
-#    how a whole campaign of TiPToP results was lost (6,486 of 6,486 planning calls
-#    failed; see docs/eval_reproduction.md). So it is started here rather than
-#    remembered, unless M2T2=skip says something else already owns it, which is
-#    what launch_campaign.sh does since it runs M2T2 in a lane of its own.
+# 3. **M2T2 (:8123) and FoundationStereo (:1234) both fail quietly.** With either
+#    down a plan comes back a well-formed success=False and a cell scores ~0% --
+#    which is how a whole campaign of TiPToP results was lost (6,486 of 6,486
+#    planning calls failed; see docs/eval_reproduction.md). So both are started
+#    here rather than remembered, unless M2T2=skip / STEREO=skip says something
+#    else already owns one -- which is what launch_campaign.sh does for M2T2,
+#    since it runs that in a lane of its own.
+#
+#    Depth is the one that used to be left out. The planner only sends a stereo
+#    pair to :1234 when the rig gives it one, so without that server a run reads
+#    as a success that quietly planned on the ZED's own depth instead.
 #
 #    Started through **tiptop's** launcher, not this repo's scripts/serve_m2t2.sh.
 #    That one serves a private clone at $MLSPACES_MODELS_DIR/m2t2 out of the
 #    parity-pinned mlspaces-m2t2 env, created on demand by setup_envs.sh and absent
-#    on this machine; tiptop vendors M2T2 under third_party/M2T2 with its own pixi
-#    environment and its weights already pulled. Same server, same port, one that
-#    exists here.
+#    on this machine; tiptop vendors both under third_party/ with their own pixi
+#    environments and their weights already pulled. Its serve_perception.sh takes
+#    the service names, so starting one that is already up is a no-op that says so.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 source "$(dirname "${BASH_SOURCE[0]:-$0}")/lib/models_dir.sh"
@@ -48,6 +53,8 @@ PORT="${PORT:-18765}"
 GPU="${GPU:-0}"
 M2T2="${M2T2:-auto}"
 M2T2_PORT="${M2T2_PORT:-8123}"
+STEREO="${STEREO:-auto}"
+STEREO_PORT="${STEREO_PORT:-1234}"
 
 # Gemini grounds the instruction into the atoms cuTAMP plans over, per request, so
 # an absent key is a run that fails at the first episode rather than at startup.
@@ -67,14 +74,13 @@ TIPTOP_PY="${TIPTOP_PYTHON:-${MLSPACES_ENVS:-$HOME/anaconda3/envs}/mlspaces-tipt
   exit 1
 }
 
-if [ "$M2T2" != "skip" ]; then
-  if (exec 3<>/dev/tcp/127.0.0.1/"$M2T2_PORT") 2>/dev/null; then
-    exec 3<&-
-    echo "m2t2 already up on :$M2T2_PORT"
-  else
-    echo "m2t2 is not on :$M2T2_PORT; starting tiptop's vendored copy"
-    "$TIPTOP_DIR/examples/droid/serve_m2t2.sh" --gpu "$GPU" --port "$M2T2_PORT" --no-follow
-  fi
+PERCEPTION=()
+if [ "$STEREO" != "skip" ]; then PERCEPTION+=(stereo); fi
+if [ "$M2T2" != "skip" ]; then PERCEPTION+=(m2t2); fi
+if [ "${#PERCEPTION[@]}" -gt 0 ]; then
+  echo "starting tiptop's vendored perception: ${PERCEPTION[*]}"
+  STEREO_PORT="$STEREO_PORT" M2T2_PORT="$M2T2_PORT" \
+    "$TIPTOP_DIR/examples/droid/serve_perception.sh" --gpu "$GPU" --no-follow "${PERCEPTION[@]}"
 fi
 
 # The env's bin on PATH, which calling its python by absolute path does not do and
