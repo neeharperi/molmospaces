@@ -51,6 +51,15 @@ RENDERER_TO_CONDA_ENV = {
 }
 
 TASKS: dict[str, TaskSpec] = {
+    # Locally generated: 40 held-out episodes of the single ProcTHOR house the
+    # FrankaPickOneEnv diffusion policy was trained on. Built by
+    # scripts/benchmarks/create_json_benchmark.py --all_episodes from the datagen batch
+    # that was excluded from the training split, so these are initial conditions the
+    # policy has not seen. classic renderer, matching the datagen config's camera system.
+    "Pick-OneEnv": TaskSpec(
+        renderer="classic",
+        path="one-env/FrankaPickOneEnv/FrankaPickOneEnv_json_benchmark_20260917",
+    ),
     "Open-v1": TaskSpec(
         renderer="classic",
         path="molmospaces-bench-v1/ithor/FrankaOpenDataGenConfig/FrankaOpenDataGenConfig_20260123_json_benchmark",
@@ -109,7 +118,17 @@ GROUP_B = (
     "PnP-Color-v2",
 )
 
-assert set(GROUP_A) | set(GROUP_B) == set(TASKS), "GROUP_A/GROUP_B must partition TASKS"
+# Group C: locally generated benchmarks, not on any leaderboard. A policy trained on one
+# environment is out of distribution on every bench-v1/v2 draw, so a number there would say
+# nothing; the comparison that means something is held-out episodes of the same environment.
+# Kept out of GROUP_A/GROUP_B so the pooled aggregates and the reproduction gates are
+# untouched -- compare_to_leaderboard.py counts REPRODUCTION_POLICIES x required tasks, and
+# neither group includes this.
+GROUP_C = ("Pick-OneEnv",)
+
+assert set(GROUP_A) | set(GROUP_B) | set(GROUP_C) == set(TASKS), (
+    "GROUP_A/GROUP_B/GROUP_C must partition TASKS"
+)
 
 # Three tasks deliberately share one benchmark JSON (FrankaPickHardBench_20260206) and differ
 # only by flags. Any *other* pair of tasks sharing a (path, extra_flags) tuple is a bug --
@@ -172,6 +191,25 @@ POLICIES: dict[str, PolicySpec] = {
         # the websocket handshake -- surfacing as "[SSL: WRONG_VERSION_NUMBER]" from the
         # client's wss:// fallback, which names neither the port nor the real problem.
         port=18765,
+    ),
+    "lerobot_droid": PolicySpec(
+        exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:LeRobotDroidPolicyEvalConfig",
+        # The server owns the weights and derives its own spec from them, so there is no
+        # client-side checkpoint to name -- same as tiptop. eval.py then omits the flag.
+        checkpoint_path="",
+        host="localhost",
+        # 8211, not serve_droid.py's default 8201: droid's own rollout client holds
+        # 8200/8201, and both harnesses have to be able to run at the same time. Same
+        # reasoning as molmoact2's 8102 and tiptop's 18765 above.
+        port=8211,
+    ),
+    "inspect_robots": PolicySpec(
+        exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:InspectRobotsEvalConfig",
+        checkpoint_path="",   # cloud model
+        host="localhost",
+        # 18300, not the rig's 8300: this server holds a per-episode Session, so
+        # unlike molmoact2 and tiptop it cannot serve both harnesses from one process.
+        port=18300,
     ),
     "dreamzero": PolicySpec(
         exp_config_cls="molmo_spaces.evaluation.configs.evaluation_configs:DreamZeroPolicyEvalConfig",

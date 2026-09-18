@@ -1,0 +1,15 @@
+# policy_name: pi0
+# run_path: /home/orayyan/projects/molmospaces/eval_output/new_results/close/pi0
+# reward_threshold: 0.85
+# dt: 0.1
+policy,category,oracle_successes,total,oracle_rate_pct,oracle_ci_95_low_pct,oracle_ci_95_high_pct,jerk_joint_mean,jerk_joint_std
+pi0,Cabinet,23,44,52.27,37.87,66.3,51.061638,19.425172
+pi0,Chestofdrawers,115,210,54.76,48.0,61.35,57.325661,33.256946
+pi0,Coffeetable,1,2,50.0,9.43,90.57,39.983183,10.861229
+pi0,Desk,16,42,38.1,24.98,53.27,59.419472,33.023906
+pi0,Door,1,3,33.33,6.76,80.59,34.621188,4.98297
+pi0,Drawer,141,298,47.32,41.71,52.99,49.888586,30.076456
+pi0,Refrigerator,2,2,100.0,29.24,99.16,68.759809,3.218413
+pi0,Safe,1,1,100.0,15.81,98.74,100.704396,0.0
+pi0,Stand,186,313,59.42,53.9,64.72,48.877143,33.954443
+pi0,OVERALL,486,915,53.11,49.87,56.33,51.768434,32.089336

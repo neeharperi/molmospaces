@@ -229,3 +229,71 @@ class BimanualYamPiPolicyConfig(BasePolicyConfig):
 
             self.policy_cls = BimanualYamPiPolicy
             self.policy_factory = make_lenient(BimanualYamPiPolicy)
+
+
+class LeRobotDroidPolicyConfig(BasePolicyConfig):
+    """A LeRobot checkpoint served over droid's policy protocol.
+
+    Port 8211, not 8201, for the reason MolmoAct2PolicyConfig uses 8102 and Tiptop 18765:
+    droid's own rollout client holds 8200/8201, and both harnesses have to be able to run
+    at once. Two copies of a ~300M diffusion policy is a rounding error on a 48 GB card.
+    Point this at 8201 instead if you would rather remove "were both loaded with the same
+    weights" as a confound -- provenance records the checkpoint either way.
+    """
+
+    checkpoint_path: str = ""       # the server owns the weights; recorded for provenance
+    remote_config: dict = dict(host="localhost", port=8211, max_retries=5)
+    # The server already emits a thresholded gripper, so pass it through rather than
+    # thresholding twice.
+    grasping_type: str = "continuous"
+    grasping_threshold: float = 0.5
+    # Must equal serve_droid.py's DEFAULT_OPEN_LOOP_HORIZON: consuming a different fraction
+    # of each chunk than the deployment harness is the single easiest way to make a
+    # cross-harness comparison meaningless, and it cost MolmoAct2 5 of every 15 actions once.
+    chunk_size: int = 8
+    policy_cls: type = None
+    policy_factory: PolicyFactory | None = None
+    policy_type: str = "learned"
+
+    def model_post_init(self, __context) -> None:
+        """Set policy_cls after initialization to avoid circular imports."""
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.learned_policy.lerobot_droid_policy import (
+                LeRobotDroidPolicy,
+            )
+
+            self.policy_cls = LeRobotDroidPolicy
+            self.policy_factory = make_lenient(LeRobotDroidPolicy)
+
+
+class InspectRobotsPolicyConfig(BasePolicyConfig):
+    """inspect-robots' agent policy, a cloud VLM planner behind droid's protocol.
+
+    Port 18300, not the rig's 8300, so both harnesses can run at once -- the same
+    reasoning as MolmoAct2's 8102 and TiPToP's 18765. Unlike those two this genuinely
+    cannot share one server: it holds a per-episode Session and the agent policy is
+    stateful.
+    """
+
+    checkpoint_path: str = ""       # cloud model; nothing client-side to name
+    remote_config: dict = dict(host="localhost", port=18300, max_retries=5)
+    force_enable_depth: bool = True  # the spec asks for wrist depth
+    camera_width: int = 640
+    camera_height: int = 360
+    grasping_type: str = "binary"
+    grasping_threshold: float = 0.5
+    chunk_size: int = 1              # a plan is consumed one action at a time
+    policy_cls: type = None
+    policy_factory: PolicyFactory | None = None
+    policy_type: str = "tamp"
+
+    def model_post_init(self, __context) -> None:
+        super().model_post_init(__context)
+        if self.policy_cls is None:
+            from molmo_spaces.policy.learned_policy.inspect_robots_policy import (
+                InspectRobotsPolicy,
+            )
+
+            self.policy_cls = InspectRobotsPolicy
+            self.policy_factory = make_lenient(InspectRobotsPolicy)

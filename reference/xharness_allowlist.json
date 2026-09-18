@@ -1,0 +1,38 @@
+{
+  "_comment": [
+    "Cross-harness payload differences that are known, understood and deliberate.",
+    "probe_cross_harness_payload.py fails on anything NOT listed here, so removing an",
+    "entry is a visible diff and adding one requires saying why. Written 2026-09-17."
+  ],
+  "allowed": [
+    {
+      "field": "prompt",
+      "policies": ["pi05_droid", "pi0_droid", "molmoact2_droid"],
+      "difference": "MolmoSpaces lowercases the instruction; the droid servers pass it through",
+      "cause": "pi_policy.py:139 and molmoact2_policy.py:134 call prompt.lower(); openpi/examples/droid/serve_droid.py:192 and molmoact2/examples/droid/host_server_droid.py:196 do not",
+      "bites": "Pick-v1.5 and the other bench-v2 tasks, whose task_description is mixed case. Close-v1's is already 'close the drawer.', so this is invisible there",
+      "severity": "unquantified -- these are instruction-following VLAs and case is a real token difference. Worth an experiment, not worth blocking on"
+    },
+    {
+      "field": "joint_positions",
+      "policies": ["pi05_droid", "pi0_droid", "dreamzero"],
+      "difference": "max|d| = 3.8e-08, dtype float64 (MolmoSpaces) vs float32 (droid)",
+      "cause": "openpi/examples/droid/serve_droid.py:183 casts to float32",
+      "severity": "benign -- float32 epsilon on a radian, four orders of magnitude below the limiter's resolution"
+    },
+    {
+      "field": "gripper_position",
+      "policies": ["molmoact2_droid"],
+      "difference": "max|d| = 3.7e-09, dtype float32 vs float64, and scalar vs shape (1,)",
+      "cause": "same float32 cast; the wrapping difference is cosmetic and openpi's client accepts either",
+      "severity": "benign"
+    },
+    {
+      "field": "wrist_depth_m",
+      "policies": ["tiptop"],
+      "difference": "max|d| = 0.001 m",
+      "cause": "droid/sim/protocol.py carries depth as uint16 millimetres, so the deployment side is quantised to 1 mm; MolmoSpaces hands its wrapper float32 metres straight from the renderer",
+      "severity": "1 mm on a 0.2-2.5 m range. TiPToP reconstructs the table plane to within a centimetre, so this is an order of magnitude inside what its own perception stack resolves"
+    }
+  ]
+}

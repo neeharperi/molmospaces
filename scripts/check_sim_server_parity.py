@@ -82,7 +82,12 @@ CAMERA_ROLES = {"wrist_camera": "wrist", "exo_camera_1": "external", "exo_camera
 
 # The Robotiq joint travel sim_server.py divides by to get a 0..1 closed fraction. Declared
 # here rather than imported so that the two copies disagreeing is a test failure.
-GRIPPER_JOINT_MAX = 0.9
+#
+# Derived from the model, not copied from sim_server.py: 2f85.xml's actuator comment says the
+# ctrl input is rescaled so ctrl=255 commands 0.8 rad, and stepping the model to rest gives
+# 0.823981. The joint's declared `range` of 0.9 is a hard limit the actuator never approaches,
+# and using it understated a closed gripper by 8.4%.
+GRIPPER_JOINT_MAX = 0.824033
 
 
 def digest(array) -> str:
@@ -120,9 +125,14 @@ def reference_state(task, obs):
 
     # The two frames the served cartesian_position is built from, kept as matrices so the
     # composition happens here and not on the server's terms.
-    base_to_world = np.asarray(
-        robot_view.get_move_group("base").leaf_frame_to_world, dtype=np.float64
-    )
+    # The ARM's root frame, not the `base` move group's leaf frame. This file used to
+    # read the latter -- the same mistake sim_server.py had -- so the check that exists
+    # to catch a frame error independently was reproducing it, and would have confirmed a
+    # cartesian_position 0.58 m too high as correct. That is the same failure this file's
+    # own docstring warns about for GRIPPER_JOINT_MAX: a constant restated from the thing
+    # under test checks it against itself. The arm's root frame is what MolmoSpaces'
+    # wrappers use and what libfranka means by the base of O_T_EE.
+    base_to_world = np.asarray(arm_group.root_frame_to_world, dtype=np.float64)
     # leaf_frame_to_world on the arm is the grasp site -- the tool centre point, which is
     # what libfranka's O_T_EE reports and therefore what the rig expects.
     tcp_to_world = np.asarray(arm_group.leaf_frame_to_world, dtype=np.float64)
@@ -140,7 +150,9 @@ def reference_state(task, obs):
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     parser.add_argument("--benchmark", type=pathlib.Path, required=True)
     parser.add_argument("--sim", default="ws://127.0.0.1:8600")
     parser.add_argument("--episodes", type=int, default=3)
@@ -156,7 +168,9 @@ def main() -> int:
 
     # droid's client, imported from the checkout beside this one. The point is to ask the
     # server the way the rig asks it, not to reimplement the protocol.
-    droid_root = pathlib.Path(os.environ.get("DROID_ROOT", pathlib.Path(__file__).resolve().parents[3]))
+    droid_root = pathlib.Path(
+        os.environ.get("DROID_ROOT", pathlib.Path(__file__).resolve().parents[3])
+    )
     sys.path.insert(0, str(droid_root))
     from droid.sim.client import SimClient
 
@@ -183,8 +197,10 @@ def main() -> int:
                 same_bench = os.path.basename(str(served_bench).rstrip("/")) == os.path.basename(
                     str(args.benchmark).rstrip("/")
                 )
-                print(f"  {'reads the same benchmark':<44} {'ok' if same_bench else 'FAILED'}"
-                      f"  {os.path.basename(str(served_bench).rstrip('/'))}")
+                print(
+                    f"  {'reads the same benchmark':<44} {'ok' if same_bench else 'FAILED'}"
+                    f"  {os.path.basename(str(served_bench).rstrip('/'))}"
+                )
                 if not same_bench:
                     print(f"       served    {served_bench}")
                     print(f"       reference {args.benchmark}")
@@ -193,18 +209,25 @@ def main() -> int:
                     break
 
             same_episode = str(served.get("house")) == str(getattr(spec, "house_index", None))
-            print(f"  {'names the same house':<44} {'ok' if same_episode else 'FAILED'}"
-                  f"  served {served.get('house')}, reference {getattr(spec, 'house_index', None)}")
+            print(
+                f"  {'names the same house':<44} {'ok' if same_episode else 'FAILED'}"
+                f"  served {served.get('house')}, reference {getattr(spec, 'house_index', None)}"
+            )
             failures += not same_episode
 
             served_arm = np.asarray(link._state["joint_positions"], dtype=np.float64)
-            delta = float(np.max(np.abs(served_arm[: len(arm)] - arm))) if len(arm) else float("nan")
+            delta = (
+                float(np.max(np.abs(served_arm[: len(arm)] - arm))) if len(arm) else float("nan")
+            )
             ok = delta <= args.tolerance
-            print(f"  {'the same episode (joints, untranslated)':<44} {'ok' if ok else 'FAILED'}  max |d| {delta:.2e} rad")
+            print(
+                f"  {'the same episode (joints, untranslated)':<44} {'ok' if ok else 'FAILED'}  max |d| {delta:.2e} rad"
+            )
             failures += not ok
 
             # ---- the translated quantities. These are what sim_server.py could get wrong.
             failures += check_cartesian(link, base_to_world, tcp_to_world, args)
+            failures += check_wrist_extrinsic(link, base_to_world, tcp_to_world, obs, args)
             failures += check_gripper(link, gripper_joints, args)
 
             # Reported, not asserted. See the module docstring: with no seed in the episode
@@ -224,13 +247,19 @@ def main() -> int:
                 got = np.asarray(entry["rgb"])
                 same_shape = got.shape == reference.shape
                 identical = same_shape and bool(np.array_equal(got, reference))
-                detail = f"{digest(got)} vs {digest(reference)}" if same_shape else f"{got.shape} vs {reference.shape}"
+                detail = (
+                    f"{digest(got)} vs {digest(reference)}"
+                    if same_shape
+                    else f"{got.shape} vs {reference.shape}"
+                )
                 verdict = "same" if identical else "differs (unseeded; see docstring)"
                 print(f"  {role + ': reported, not asserted':<44} {verdict:<8} {detail}")
                 # A shape mismatch is a real fault whichever camera it is: it means the two
                 # sides disagree about what the episode asked for, not about a random draw.
                 if not same_shape:
-                    print(f"  {role + ': the same frame size':<44} FAILED  {got.shape} vs {reference.shape}")
+                    print(
+                        f"  {role + ': the same frame size':<44} FAILED  {got.shape} vs {reference.shape}"
+                    )
                     failures += 1
 
             release(sampler, task)
@@ -239,7 +268,9 @@ def main() -> int:
 
     print()
     if failures:
-        raise SystemExit(f"FAILED: {failures} check(s). The two sides are not building the same episode.")
+        raise SystemExit(
+            f"FAILED: {failures} check(s). The two sides are not building the same episode."
+        )
     print("OK -- the sim server hands the rig the episode this harness would evaluate.")
     return 0
 
@@ -270,6 +301,19 @@ def release(sampler, task) -> None:
     gc.collect()
 
 
+def _pose6(matrix):
+    """4x4 -> [x, y, z, roll, pitch, yaw], via scipy rather than droid's helper.
+
+    Declared here rather than imported from sim_server.py for the same reason
+    GRIPPER_JOINT_MAX is: a checker that reuses the code under test checks it against
+    itself.
+    """
+    from scipy.spatial.transform import Rotation
+
+    matrix = np.asarray(matrix, dtype=np.float64)
+    return np.concatenate([matrix[:3, 3], Rotation.from_matrix(matrix[:3, :3]).as_euler("xyz")])
+
+
 def check_cartesian(link, base_to_world, tcp_to_world, args) -> int:
     """The served base-frame TCP pose, against one composed here.
 
@@ -286,7 +330,9 @@ def check_cartesian(link, base_to_world, tcp_to_world, args) -> int:
     expected = np.linalg.inv(base_to_world) @ tcp_to_world
     d_pos = float(np.max(np.abs(served[:3] - expected[:3, 3])))
     ok_pos = d_pos <= args.pose_tolerance
-    print(f"  {'the same tool pose (base frame, position)':<44} {'ok' if ok_pos else 'FAILED'}  max |d| {d_pos:.2e} m")
+    print(
+        f"  {'the same tool pose (base frame, position)':<44} {'ok' if ok_pos else 'FAILED'}  max |d| {d_pos:.2e} m"
+    )
 
     # Rebuilt through scipy rather than droid's matrix_to_pose, so the conversion itself is
     # under test rather than compared with its own output.
@@ -295,8 +341,58 @@ def check_cartesian(link, base_to_world, tcp_to_world, args) -> int:
     got_rotation = Rotation.from_euler("xyz", served[3:6]).as_matrix()
     d_rot = float(np.max(np.abs(got_rotation - expected[:3, :3])))
     ok_rot = d_rot <= args.pose_tolerance
-    print(f"  {'the same tool pose (base frame, rotation)':<44} {'ok' if ok_rot else 'FAILED'}  max |d| {d_rot:.2e}")
+    print(
+        f"  {'the same tool pose (base frame, rotation)':<44} {'ok' if ok_rot else 'FAILED'}  max |d| {d_rot:.2e}"
+    )
     return (not ok_pos) + (not ok_rot)
+
+
+def check_wrist_extrinsic(link, base_to_world, tcp_to_world, obs, args) -> int:
+    """The served wrist extrinsic, composed the way the rig composes it, against truth.
+
+    This is the check that did not exist when two frame bugs shipped. TiPToP is the only
+    policy that reads an extrinsic, so nothing else would ever have noticed.
+
+    The invariant: ``sim_server.geometry()`` hands back the wrist camera as a
+    GRIPPER-frame offset -- the contract ``droid/sim/scene.py`` states for the local
+    scene -- and ``SimRig.get_camera_extrinsics`` composes it with the live tool pose to
+    recover the base-frame pose. Those two steps must be exact inverses. They were not:
+    the server returned base frame, so the composition ran twice and put the camera a
+    metre from where MolmoSpaces has it.
+    """
+    # Keyed by serial, not by role -- SimClient stores what the wire carries.
+    wrist_serials = set(getattr(link, "wrist_serials", ()) or ())
+    served = next(
+        (v for k, v in (link._extrinsics or {}).items() if k in wrist_serials),
+        None,
+    )
+    if served is None:
+        print(f"  {'wrist extrinsic arrived':<44} skipped  this scene serves no wrist camera")
+        return 0
+    params = obs.get("sensor_param_wrist_camera")
+    if not isinstance(params, dict) or "extrinsic_cv" not in params:
+        print(f"  {'wrist extrinsic comparable':<44} skipped  no sensor_param_wrist_camera")
+        return 0
+
+    # Truth, from MolmoSpaces: extrinsic_cv maps world into the camera, so invert it for
+    # the camera's pose and re-frame into the arm's root.
+    cam_from_world = np.eye(4)
+    cam_from_world[:3, :4] = np.asarray(params["extrinsic_cv"], dtype=np.float64)
+    expected = np.linalg.inv(base_to_world) @ np.linalg.inv(cam_from_world)
+
+    # What the rig ends up with: the served offset put back through the same composition
+    # RobotEnv.get_camera_extrinsics performs, against the same tool pose.
+    from droid.misc.transformations import change_pose_frame, pose_to_matrix
+
+    tcp_in_base = _pose6(np.linalg.inv(base_to_world) @ tcp_to_world)
+    composed = pose_to_matrix(change_pose_frame(np.asarray(served, dtype=np.float64), tcp_in_base))
+
+    d = float(np.max(np.abs(composed[:3, 3] - expected[:3, 3])))
+    ok = d <= args.pose_tolerance
+    print(
+        f"  {'the same wrist camera pose (base frame)':<44} {'ok' if ok else 'FAILED'}  max |d| {d:.2e} m"
+    )
+    return 0 if ok else 1
 
 
 def check_gripper(link, gripper_joints, args) -> int:
@@ -308,8 +404,10 @@ def check_gripper(link, gripper_joints, args) -> int:
     expected = float(np.clip(np.mean(gripper_joints) / GRIPPER_JOINT_MAX, 0.0, 1.0))
     delta = abs(float(served) - expected)
     ok = delta <= args.pose_tolerance
-    print(f"  {'the same gripper fraction':<44} {'ok' if ok else 'FAILED'}  "
-          f"served {float(served):.6f} vs {expected:.6f}")
+    print(
+        f"  {'the same gripper fraction':<44} {'ok' if ok else 'FAILED'}  "
+        f"served {float(served):.6f} vs {expected:.6f}"
+    )
     return not ok
 
 

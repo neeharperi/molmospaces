@@ -1,0 +1,15 @@
+# policy_name: dreamzero
+# run_path: /home/orayyan/projects/molmospaces/eval_output/new_results/close/dreamzero
+# reward_threshold: 0.85
+# dt: 0.1
+policy,category,oracle_successes,total,oracle_rate_pct,oracle_ci_95_low_pct,oracle_ci_95_high_pct,jerk_joint_mean,jerk_joint_std
+dreamzero,Cabinet,24,44,54.55,40.0,68.34,27.016393,16.848449
+dreamzero,Chestofdrawers,129,210,61.43,54.69,67.75,26.828501,25.488036
+dreamzero,Coffeetable,2,2,100.0,29.24,99.16,13.328801,2.868966
+dreamzero,Desk,16,42,38.1,24.98,53.27,19.226559,9.26732
+dreamzero,Door,0,3,0.0,0.63,60.24,19.589362,2.121664
+dreamzero,Drawer,189,298,63.42,57.81,68.69,27.848777,23.594154
+dreamzero,Refrigerator,0,2,0.0,0.84,70.76,13.967787,0.596615
+dreamzero,Safe,1,1,100.0,15.81,98.74,10.105471,0.0
+dreamzero,Stand,191,313,61.02,55.51,66.26,21.075774,17.247963
+dreamzero,OVERALL,552,915,60.33,57.12,63.45,24.773359,21.49101

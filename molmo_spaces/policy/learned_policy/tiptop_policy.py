@@ -13,7 +13,14 @@ import logging
 import time
 
 import cv2
-import msgpack_numpy
+# openpi's, NOT the standalone PyPI msgpack_numpy this used to import. The TiPToP
+# server was deliberately moved to openpi's ndarray convention
+# (tiptop_websocket_server.py:65-74, "Deliberately NOT the PyPI msgpack-numpy this
+# file used to use"), and this client was never moved with it. The two encodings
+# disagree -- `__ndarray__` versus `nd` -- so every array arrived as an undecoded
+# dict and the server died on `obs["rgb"].astype(...)`, returning success=False
+# rather than raising. Measured: that made a whole Pick-v1.5 cell score 0/50.
+from openpi_client import msgpack_numpy
 import numpy as np
 
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
@@ -28,7 +35,7 @@ logging.basicConfig(level=logging.INFO)
 class TiptopWebsocketClient(EndpointWebsocketClient):
     """Websocket client for a TiPToP server.
 
-    Uses the standalone PyPI msgpack_numpy, which is what the TiPToP server speaks.
+    Uses openpi_client.msgpack_numpy, which is what the TiPToP server speaks.
     """
 
     msgpack = msgpack_numpy

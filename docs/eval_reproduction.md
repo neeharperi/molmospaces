@@ -4802,3 +4802,356 @@ resolved through the editable install to the main checkout.
 It gave itself away only because the arm that should have deferred its videos was writing
 them mid-house. `PYTHONPATH` is what isolates, exactly as
 `scripts/probe_policy_payload.py`'s docstring already says.
+
+## 2026-09-17 -- cross-harness campaign: the payload seam, and three things that were wrong
+
+First campaign to run the same 50-episode draws through **both** harnesses. Cells in
+`runs/<policy>/<task>/20260917_xh/`; deployment-side results, videos and the full log in
+`~/Workspace/droid/data/xharness_20260917/` (gitignored -- this section is the durable part).
+
+### The gripper divisor was wrong on the deployment side, by 8.4%
+
+`droid/scripts/sim_server.py` divided the Robotiq driver joint by `0.9`, the joint's
+declared MJCF `range`. The actuator never reaches it. 2f85.xml's own actuator comment says
+the ctrl input is rescaled so `max(Kp * scale * ctrl) = 0.8`; stepping the model to rest
+measures
+
+    ctrl=0 -> 0.002590    ctrl=127.5 -> 0.414535    ctrl=255 -> 0.823981
+
+against this repo's `MLSPACES_GRIPPER_MAX_POS = 0.824033`, which is also the constant the
+DROID training data was converted with. So a fully closed gripper reported **0.916 instead
+of 1.0** to every policy driven through the deployment harness. Fixed to 0.824033 there and
+in `scripts/check_sim_server_parity.py`'s deliberately independent copy. No deployment cell
+predates the fix.
+
+### The payload seam: measured, and it mostly agrees
+
+New: `scripts/probe_cross_harness_payload.py`. One synthetic observation, built once, pushed
+through MolmoSpaces' wrapper and through `droid/policy/observation.py`, compared field by
+field. Both arms run in one process -- `droid.policy.observation` imports cleanly under
+`mlspaces-classic`, so the py3.8 container is not needed and there is no cross-process
+rendering to add noise.
+
+* **pi0, pi0.5: images byte-identical after resize** (max|d| exactly 0), gripper identical,
+  joints to float32 epsilon. Not guaranteed in advance: `droid/policy/images.py` *rounds*
+  the scaled height where `molmo_spaces/policy/learned_policy/utils.py` *truncates*, and
+  they agree at 624x352 only because 352*224/624 = 126.36 rounds and truncates alike.
+* **tiptop: wrist image, intrinsics, joints, prompt all identical**; depth differs by 1 mm,
+  which is `droid/sim/protocol.py`'s uint16-millimetre wire format.
+* **molmoact2 is fed different-sized images.** Its spec declares 640x360 because that is the
+  *real* rig's 16:9 ZED; MolmoSpaces renders 624x352 (aspect 1.7727). So the deployment side
+  exact-resizes with a slight stretch that only happens in sim. The server resizes to
+  378x378 anyway, but the two paths do not converge: mean |d| 2.08/255, 14.1% of subpixels
+  off by >2 (bilinear, synthetic edge-heavy input).
+* **DreamZero cannot run in the deployment harness on either benchmark.** It declares
+  `external_2`; neither Close-v1 nor Pick-v1.5 renders a second exterior. MolmoSpaces'
+  `resolve_camera_keys` finds one and silently duplicates it; `observation.build` refuses.
+  Not a bug in either -- but they are not the same experiment, and this is worth settling
+  before costing a DreamZero deployment cell.
+
+Known differences are enumerated in `reference/xharness_allowlist.json` (prompt case, the
+float32 casts, the 1 mm depth quantisation) so anything new fails.
+
+### An action-level cross-harness comparison is the wrong instrument
+
+`scripts/probe_cross_harness_action.py` sends both payloads to one live server and diffs the
+chunk, with controls. Against `pi05_droid_jointpos` on :8080:
+
+    self      (same payload twice)        max|d| 5.240e-01
+    CROSS     (simulation vs deployment)  max|d| 7.564e-01
+    perturbed (joint 0 + 1e-3 rad)        max|d| 7.423e-01   -> VOID
+
+pi0.5 samples, and openpi splits its sampler key per inference, so the same bytes twice
+differ by 0.52 rad -- the same order as a real 1e-3 rad input change. Without the controls
+the cross number reads as a finding and is not one. The answerable form of the question is
+the payload one: identical bytes in, so any difference out is the sampler.
+
+### A category-matched 50-episode draw is not a small version of the benchmark
+
+| | n=50 draw (sim / deploy) | full n=915 | leaderboard |
+|---|---|---|---|
+| pi0.5 / Close-v1 | 72.0 / 64.0 | 66.12 | 65.14 |
+| pi0 / Close-v1 | 70.0 / 72.0 | 53.88 | 53.11 |
+| molmoact2 / Close-v1 | 78.0 / 74.0 | 72.90 | 71.26 |
+
+`Close-v1-smoke50` is category-matched to a total-variation distance of 0.06 and is
+**+16 pp easy for pi0**, +6 for pi0.5, +5 for molmoact2. The bias is the draw *crossed with
+the policy*, i.e. within-category, so `category_mix_check.py` cannot correct it -- it
+reweights across categories. Both harnesses see it identically and the archived
+full-coverage pi0 cell reproduces correctly, so it is the draw, not the harness or the
+policy.
+
+**So a small matched draw supports the cross-harness question and not the leaderboard
+question.** Cross-harness: both sides see the same episodes, internally valid. Leaderboard:
+the interval is +/-14 pp and the draw can be 16 pp off, so a policy that reproduces at full
+coverage can read as a miss.
+
+### RETRACTED: the limiter is not what separates the harnesses
+
+The deployment side ran below the simulation side in 3 of 5 cells, ordered by clamp rate
+(r = -0.848 at n=4). `--substeps 4` on the identical 50 episodes, pi0.5/Close-v1:
+
+| | clamp | success_any |
+|---|---|---|
+| `--substeps 1` (default) | 9.7% | **64.0%** |
+| `--substeps 4` | **3.2%** | **52.0%** |
+
+Clamping fell threefold and success fell 12 pp *away* from the simulation harness. Adding
+molmoact2 weakens the correlation independently (n=5, r = -0.767; the highest clamp rate,
+10.6%, has one of the smallest gaps). So `sim.sh`'s `--substeps 1` default at the nominal
+limit is right for a comparable cell -- STARTUP.md's substeps advice is about protecting the
+*arm* at 0.05, a different problem -- and the residual pi0.5 gap is unexplained.
+
+### Images DID reproduce across processes, 3/3
+
+`check_sim_server_parity.py` reports images rather than asserting them, on the documented
+grounds that `seed: null` makes them irreproducible. On Close-v1-smoke50 they hashed
+identical for all three episodes, across two processes. Camera randomisation only runs under
+`--use_eval_cameras` (`json_eval_task_sampler.py:703-707`), which these tasks do not use. If
+that holds, the run-to-run outcome flipping is the *policy* (none of the servers carried
+`XLA_FLAGS`), which is fixable, and `compare_harnesses.py`'s exact verdict may be earnable
+for Close-v1. Three episodes, one benchmark -- not settled. The cheap experiment is the same
+cell twice against one `DETERMINISTIC=1` server.
+
+### Three harness bugs, all silent, all fixed in droid's `scripts/sim.sh`
+
+* `--scenes` imported `molmo_spaces` *before* exporting `MLSPACES_PINNED_ASSETS_FILE`, so
+  listing the scene configs made the resource manager upgrade assets under
+  `$MLSPACES_ASSETS_DIR`. It did that to `robots/g1` and blocked every subsequent run.
+* A host-absolute `--results` path was resolved *inside* the container, so results were
+  written to its ephemeral filesystem and discarded on exit, with the run printing the path
+  it had written. Now rewritten to repo-relative, or refused.
+* A scene server is pinned to the benchmark it was **started** with, so reusing one across a
+  task change gets the run refused after the container is already up. New `--fresh-scene`
+  stops it first; `--stop` and the new path share one `sim_stop_port` helper.
+
+### MAX_RECONNECTS is a per-RUN budget, and a long sweep exhausts it
+
+The molmoact2 Pick-v1.5 deployment cell lost **20 of 50 episodes** to
+
+    giving up after 10 reconnections to http://127.0.0.1:8102.
+    The server is not staying up; check its log.
+
+The server had not gone anywhere: its log is 200 OKs end to end, and it answered `/healthz`
+afterwards. `droid/policy/client.py:47` sets `MAX_RECONNECTS = 10`, and `self.reconnects`
+(`client.py:386`) lives on the transport object, which `simulate.py` builds **once** and
+reuses for every episode in the sweep. So the ten reconnections are a budget for the whole
+run, not for a rollout.
+
+What spends it: uvicorn reaps an idle keep-alive connection after ~5 s, and Pick-v1.5 draws
+from 38 houses, so scene setup between episodes is long enough that nearly every episode
+costs one reconnect. Both lanes died at their 15th episode, simultaneously and
+independently. Close-v1 (10 houses) sets up fast enough that 25 episodes fit inside the
+budget, which is why that cell ran 50/50 with the identical two-lane arrangement.
+
+Worked around by running the cell in chunks of 5 episodes, each invocation getting a fresh
+budget. The real fix is a decision about `client.py`: reset the counter per episode (each
+rollout is arguably its own unit), or make the budget a flag. Left alone here because that
+counter is what stops an infinite reconnect loop against a genuinely dead server, and the
+rollout client is not a thing to change untested.
+
+**Read `ended` and `steps` before any rate.** These 20 episodes were recorded with
+`success_any: false` and `steps: 0`, so a naive rate treated them as policy failures and
+reported 14.0% where the 30 real episodes give 23.3%.
+
+---
+
+## TiPToP scored zero because the planner was carrying the physical lab around
+
+**Symptom.** Every Pick-v1.5 episode failed, and the server log read
+`Motion planning failed for 32/256 satisfying particle(s) (max attempts reached)`.
+
+**The misreading worth naming.** The first pass recorded this as "no satisfying particles",
+i.e. the targets were out of reach — and there *were* a few of those, at 0.79–0.98 m against
+a Franka's 0.855 m. But aggregating all 26 saved `tiptop_server_outputs/<ts>/` dumps showed
+that was the minority. The dominant line says cuTAMP found **200–256 satisfying particles**
+— IK solved, grasp poses reachable — and cuRobo then rejected **all 32** motion-planning
+attempts. The `32` is the tell: `max_attempts` is 32, so a constant 32 failures is
+particle-*independent*. A reach problem would vary with the particle; a start-state problem
+would not.
+
+**Cause.** `tiptop/workspace.py::fr3_workspace()` injects the *physical lab's* furniture into
+the collision world — the bench the arm is bolted to, the two ZED 2i stands, and a
+1.5 × 2.0 m `ceiling` plate at z = 1.0 whose docstring says it "bounds the planner rather
+than modelling anything physical". None of it exists in a ProcTHOR kitchen. Meanwhile
+`TiptopEvalConfig` sets `cam_obs_qpos=[0,-1,0,-1,0,1,-3]` so the wrist camera gets a clear
+view — and that pose puts the camera at **z = 1.027, above the phantom ceiling**. Every plan
+was therefore rejected at its start state with `INVALID_START_STATE_WORLD_COLLISION`.
+
+Loading a saved `perception/cutamp_env.pkl` shows the phantom statics plainly:
+
+```
+workspace_table    dims=[1.2, 1.6, 0.02]    pose=[0.35, 0,    -0.01]
+workspace_camera_left  dims=[0.25,0.25,0.55] pose=[0.289, 0.519, 0.275]
+workspace_camera_right dims=[0.25,0.25,0.55] pose=[0.219,-0.427, 0.275]
+workspace_ceiling  dims=[1.5, 2.0, 0.01]    pose=[0.35, 0,     1.0 ]
+```
+
+**Fix.** Start the server with `--no-include-workspace`. This is not a workaround:
+`motion_planning.py:150` documents the flag as "skip the real-robot workspace cuboids (e.g.
+for sim)", and `tiptop_offline.py` already passes `include_workspace=False`. `_run_server`
+defaults it to `True` only because a plan off that server normally drives a real arm.
+**Leave it on for the rig.**
+
+**Verified before spending a cell on it.** `data/xharness_20260917/replay_tiptop_dump.py`
+replays a saved dump against a live server — same pixels, same `q_init`, same task string,
+only the flag differs. Three dumps that had failed with "32/N satisfying particles": two now
+return complete five-step plans, the third fails for an unrelated and legitimate reason
+(particle initialisation — no grasps for that object). In the live cell, planning dropped
+from **56 s to ~0.4 s** (it no longer exhausts all ten skeletons before giving up) and
+`INVALID_START_STATE_WORLD_COLLISION` went from 32 per episode to **0**.
+
+### Two rate claims that turned out to be wrong, and are withdrawn
+
+The campaign plan listed "fix `TiptopEvalConfig.policy_dt_ms` from 20.0 to 66.7" as a
+Phase-0 item. **Both halves of that were wrong.** A serialized plan carries `dt=0.02`, so the
+simulation side's 20.0 ms already matches the planner's own rate exactly, and 66.7 would have
+played every plan 3.3× slow. The deployment side is fine too: `execution.py` **resamples**
+each trajectory to `control_hz` rather than stepping one waypoint per tick, so wall-clock
+duration is preserved there as well. The one real difference left is tracking fidelity —
+`whole_paths` requires a backend that declares `executes_paths`, and only `BambooBackend`
+does, so the sim backend streams setpoints instead of handing over timed paths.
+
+### The capture pose is a genuine harness difference
+
+The simulation harness drives the arm to `cam_obs_qpos` over 200 ticks before capturing;
+the deployment harness had no such concept and planned from wherever the episode started.
+For a policy that perceives the whole scene from **one** wrist-camera frame, that is not a
+detail — it is the input. It also explains the deployment side's very different failure mix
+(no table plane found, point clouds too sparse to associate grasps, Gemini naming objects the
+task never mentions) against the simulation side's planning failures.
+
+`policy.py` now takes `--pre-obs-qpos J0,..,J6` (with `--pre-obs-steps`, default 200),
+off by default so the rig is untouched. tiptop's own rig config has the same idea under the
+name `q_capture`, and `DROID_DEPLOYMENT.md` states "everything TiPToP perceives comes from
+this one view". Both deployment cells are reported: the as-is one, which says what the
+deployment stack does today, and the matched one, which is the like-for-like comparison.
+
+---
+
+## The deployment harness had the wrist camera in the wrong frame, twice
+
+Found only because TiPToP is the one policy in the campaign that reads a camera extrinsic.
+
+**Symptom.** With the capture pose matched between harnesses, TiPToP's perception failures
+disappeared as predicted — and cuTAMP then failed on everything instead. The server log
+said why: reconstructed table surfaces at **z = 0.99** and object centroids at **negative
+x**, where the simulation harness put the same scenes at z = 0.04–0.16 and positive x.
+
+The clean measurement: at an *identical* joint configuration
+(`q = [0, -1, 0, -1, 0, 1, -2.98]`), the two harnesses placed the wrist camera at
+
+```
+simulation   [-0.089,  0.014,  1.027]
+deployment   [ 0.805,  0.004,  0.659]     <- a metre out
+```
+
+### Bug 1 — the wrist extrinsic was returned in the base frame
+
+`sim_server.geometry()` returned every camera in the base frame. But `droid/sim/scene.py:384`
+— the *other* implementation of the same `extrinsics(serial)` interface, used by the local
+scene — returns the wrist camera's **gripper-frame** offset, and its docstring says exactly
+why: `SimRig` hands it to the same re-framing `RobotEnv.get_camera_extrinsics` performs on
+the real rig, "so that path is exercised rather than bypassed."
+
+That re-framing composes the stored offset with the arm's live `cartesian_position`. So the
+remote path composed a base-frame pose with the gripper pose a second time. The result is a
+product of two real poses, which is still a real pose — plausible-looking, and wrong.
+
+### Bug 2 — "base" was the wrong frame
+
+`base_to_world` used the **`base` move group's leaf frame**, which on these scenes sits
+**0.58 m** below the **arm's own root frame**. The arm's root frame is what MolmoSpaces'
+wrappers use (`tiptop_policy.py`: `get_move_group("arm").root_frame_to_world`) and what
+libfranka means by the base of `O_T_EE`.
+
+### Verified in three steps rather than asserted
+
+| after | check | result |
+|---|---|---|
+| bug 1 | wrist stored pose | `[-0.074, 0.031, -0.133]`, \|t\| = **0.155 m** — a wrist-camera mount offset, not a base-frame pose. Static exterior unchanged. |
+| bug 2 | `cartesian_position` at reset | z **1.0031 → 0.4231**, exactly 0.580 m, x and y unchanged. A Franka TCP 0.42 m above its base at reset is correct. |
+| both | camera pose end to end | `[0.805, 0.004, 0.659]` → within a centimetre of the simulation harness in x and y |
+
+### Why the parity probe missed it — the part worth fixing in the method
+
+`parity/REPORT.md` compares images, joints, gripper, prompt, intrinsics and depth. **It does
+not compare extrinsics.** TiPToP is the only policy that reads one, so the single field never
+checked is the single field that was wrong. Add extrinsics to the probe.
+
+Every deployment cell also reported `cartesian_position` 0.58 m high. No policy in this
+campaign consumes it, so nothing else was affected — luck, not design.
+
+**Blast radius.** Both TiPToP *deployment* cells are invalid and were re-run. The TiPToP
+*simulation* cell (66.0%, with the leaderboard's 67.5% inside its interval) never touches
+`sim_server.py` and stands. pi0, pi0.5, MolmoAct2 and the LeRobot policy read neither
+extrinsics nor cartesian position, so their cells stand.
+
+---
+
+## inspect-robots: the benchmark needs a conversation scope the server does not offer
+
+`inspect-robots-droid-serve` runs an LLM agent. How its conversation is scoped decides what
+the benchmark measures, and neither available setting is right.
+
+`_session.py::_episode_for` keys the conversation on the **prompt string**:
+
+```python
+existing = self._episodes.get(prompt)
+if existing is not None and not self._config.fresh_per_connection:
+    return existing, False
+```
+
+Close-v1 draws from about five prompts ("close the drawer.", "close the table.", …), so 50
+episodes across 50 different houses collapse into **five conversations**. Measured from the
+server's own `--transcript`: 333 turns on "close the table.", 321 on "close the drawer.",
+with the context reaching **311 messages / 594 KB** — mostly images of *other houses'*
+drawers. The agent is then asked to close a drawer it has never seen while its history
+insists it has been trying for 140 turns. It scored 1/36, and the failures clustered by
+house exactly as contamination predicts.
+
+The file warns about this itself, in `_expire_idle`: *"An episode holds a whole
+conversation, and a scene that has physically changed since makes continuing one worse than
+starting over."* The scene changes every episode; the prompt does not.
+
+**`--fresh-per-connection` is not the fix, and the name is misleading.** `Session` is
+constructed once in `_cli.py:259` and shared by every connection, so that branch runs on
+every **request**. Measured: `messages=5` on all of them, `turn=1` always. The agent then
+has no memory even within a single episode.
+
+| mode | actual scope | measured |
+|---|---|---|
+| default | per prompt string | 311 messages spanning unrelated houses |
+| `--fresh-per-connection` | per request | `messages=5` always, no memory at all |
+| what a benchmark needs | **per episode** | — |
+
+**The boundary is already on the wire.** droid's payload carries `step`, which both
+harnesses reset to 0 at the start of every episode (`droid/policy/observation.py:250`, and
+the MolmoSpaces wrapper's `reset()`), and `_observation.to_observation` already reads it as
+`droid_step`. A local patch to `_episode_for` starts a new episode when that counter
+restarts and otherwise continues the one in progress. `--fresh-per-connection` still forces
+the upstream per-request behaviour. The upstream version is in git history (`git show HEAD:...:_session.py` before this commit).
+
+Verified from the transcript before trusting any cell — deployment side:
+
+```
+turn  1  2  3  4  5  6
+msgs  5  8 10 13 16 19 22     … then reset at the episode boundary
+```
+
+**It costs about 3.5x.** Episodes went from 1.32 min to ~4.5 min, because planner latency
+climbs within an episode as context accumulates (6.3 s → 10.1 s → 16.0 s, then back to
+4.3 s on the next episode). That is the price of the agent actually remembering, and it is
+the honest configuration to measure.
+
+### Two smaller notes
+
+**`check_workspace` is a live trap for anyone running cartesian mode.** inspect-robots
+carries the same hard-coded lab furniture TiPToP does — `WORKSPACE_LOW/HIGH =
+[0.25,-0.30,0.03]..[0.65,0.30,0.45]`, a 40x60x42 cm box, plus identical table and
+camera-stand obstacles. It fires **zero** times here only because these cells run
+`--mode joint`, and `_safety.check_workspace` is called only in cartesian mode.
+
+**Close-v1 is the easiest cell in the benchmark**, so "try an easier task" has no answer:
+leaderboard maxima are Close-v1 71.3%, Pick-v1.5 67.5%, Pick-v2-classic 50.0%, down to
+Open-v1 at 24.9%. The `Close-v1-smoke50` draw used here is easier still.

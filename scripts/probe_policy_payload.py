@@ -103,6 +103,8 @@ POLICIES = {
     "molmoact2_droid": "MolmoAct2PolicyEvalConfig",
     "dreamzero": "DreamZeroPolicyEvalConfig",
     "tiptop": "TiptopEvalConfig",
+    "lerobot_droid": "LeRobotDroidPolicyEvalConfig",
+    "inspect_robots": "InspectRobotsEvalConfig",
 }
 
 # Non-square on purpose: resize_with_pad must actually letterbox, so a padding regression moves

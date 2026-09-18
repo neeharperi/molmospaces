@@ -33,6 +33,8 @@ from pathlib import Path
 from molmo_spaces.configs.abstract_exp_config import MlSpacesExpConfig
 from molmo_spaces.configs.policy_configs import BrownianMotionPolicyConfig, DummyPolicyConfig
 from molmo_spaces.configs.policy_configs_baselines import (
+    InspectRobotsPolicyConfig,
+    LeRobotDroidPolicyConfig,
     CAPPolicyConfig,
     DreamZeroPolicyConfig,
     MolmoAct2PolicyConfig,
@@ -399,3 +401,30 @@ class BrownianNavToObjEvalConfig(DummyNavToObjEvalConfig):
         self.policy_config.policy_cls = BrownianMotionPolicy
         self.policy_config.policy_factory = make_lenient(BrownianMotionPolicy)
         return self.policy_config
+
+
+class LeRobotDroidPolicyEvalConfig(JsonBenchmarkEvalConfig):
+    """Eval cell for a LeRobot checkpoint served over droid's protocol."""
+
+    robot_config: FrankaRobotConfig = FrankaRobotConfig()
+    policy_config: LeRobotDroidPolicyConfig = LeRobotDroidPolicyConfig()
+    # 15 Hz, matching the dataset's own fps and the spec's control_hz.
+    policy_dt_ms: float = 66.0
+
+    def model_post_init(self, __context):
+        super().model_post_init(__context)
+        self.robot_config.action_noise_config.enabled = False
+
+
+class InspectRobotsEvalConfig(JsonBenchmarkEvalConfig):
+    """Eval cell for inspect-robots' plan-emitting cloud agent."""
+
+    robot_config: FrankaRobotConfig = FrankaRobotConfig()
+    policy_config: InspectRobotsPolicyConfig = InspectRobotsPolicyConfig()
+    # 25 Hz, matching the spec's control_hz and the plan's own dt, so the resampler is a
+    # no-op. TiPToP's 20.0 (50 Hz) against a 15 Hz rig is the mistake this avoids.
+    policy_dt_ms: float = 40.0
+
+    def model_post_init(self, __context):
+        super().model_post_init(__context)
+        self.robot_config.action_noise_config.enabled = False
