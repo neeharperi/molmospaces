@@ -103,10 +103,12 @@ start_servers() {
     _srv dreamzero   "env GPUS=0 DIT_SPLIT=0 PORT=5000 bash scripts/serve_dreamzero.sh"
     _srv molmoact2   "env GPU=2 PORT=8000 bash scripts/serve_molmoact2.sh"
     _srv m2t2        "env GPU=2 PORT=8123 bash scripts/serve_m2t2.sh"
-    # TiPToP must run from the REPO ROOT: with cwd=third_party/tiptop, sys.path[0] contains a
-    # cutamp/ directory with no __init__.py, which shadows the installed editable package as a
-    # PEP 420 namespace package and fails startup with a misleading "cuTAMP version mismatch".
-    _srv tiptop      "env CUDA_VISIBLE_DEVICES=2 $ENVS/mlspaces-tiptop/bin/python -m tiptop.tiptop_websocket_server --port 18765"
+    # M2T2=skip because the m2t2 lane above owns :8123; serve_tiptop.sh would otherwise
+    # start tiptop's own vendored copy and lose the race to bind. That script also carries
+    # the reason this must run from the repo root -- with cwd=third_party/tiptop, sys.path[0]
+    # contains a cutamp/ directory with no __init__.py, which shadows the installed editable
+    # package and fails startup with a misleading "cuTAMP version mismatch".
+    _srv tiptop      "env GPU=2 PORT=18765 M2T2=skip bash scripts/serve_tiptop.sh"
     _srv openpi_pi05 "env GPU=3 PORT=8080 CONFIG=pi05_droid_jointpos bash scripts/serve_openpi.sh"
     _srv openpi_pi0  "env GPU=3 PORT=8081 CONFIG=pi0_droid_jointpos  bash scripts/serve_openpi.sh"
     echo
